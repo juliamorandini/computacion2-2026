@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  # Base de datos en memoria
+  redis:
+    image: redis:alpine
+    networks:
+      - sistema-net
+
+  # Proceso en segundo plano
+  worker:
+    build: ./worker
+    depends_on:
+      - redis
+    networks:
+      - sistema-net
+
+  # Interfaz web accesible desde el host
+  web:
+    build: ./web
+    ports:
+      - "8080:5000" # Mapeamos el puerto 8080 de tu PC al 5000 del contenedor
+    depends_on:
+      - redis
+    networks:
+      - sistema-net
+
+networks:
+  sistema-net:
+    driver: bridge

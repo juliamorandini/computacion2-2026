@@ -1,0 +1,20 @@
+¿Cuántos archivos hay directamente en /etc? (sin contar los que están en subdirectorios)
+Usando el comando ls -1p /etc | grep -v / | wc -l
+81
+
+¿Cuál es el tamaño exacto de /etc/passwd? (en bytes)
+Usando el comando stat -c %s /etc/passwd
+1424
+
+¿Qué tipo de archivo es /dev/null? ¿Por qué es especial?
+Es un archivo de caracteres especiales y es especial porque todo lo que sea agregado a ese archivo va a desaparecer
+
+¿A dónde apunta el enlace simbólico /bin? (en sistemas modernos, /bin suele ser un symlink)
+Usando el comando readlink -f /bin, apunta a /usr/bin
+
+¿Cuál es el número de inodo de tu archivo .bashrc? (o .zshrc si usás zsh)
+Usando el comando ls -i ~/.bashrc, el numero es 46433 
+
+¿Cuántos enlaces duros tiene el directorio /home? ¿Por qué tiene ese número?
+Usando el comando ls -ld /home tiene 3 enlaces duros porque siempre sigue la logica de k + 2, k siendo el numero de subdirectorios que contiene. 
+En este caso son 3 porque tengo un solo usuario dentro de home, el directorio de ese usuario contiene un enlace .. (padre) que apunta hacia /home

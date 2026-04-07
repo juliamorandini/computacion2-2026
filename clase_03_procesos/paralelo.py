@@ -67,3 +67,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+#cd /mnt/d/UM/computacion\ 2/computacion2/clase_03_procesos
+#python3 paralelo.py "sleep 1" "echo hola"

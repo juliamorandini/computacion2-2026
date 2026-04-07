@@ -59,6 +59,11 @@ def main():
     fin = time.time()
     duracion = fin - inicio
 
+    print(f"\nResumen:")
+    print(f"- Comandos ejecutados: {len(comandos)}")
+    print(f"- Exitosos: {exitosos}")
+    print(f"- Fallidos: {fallidos}")
+    print(f"- Tiempo total: {duracion:.2f}s")
 
 if __name__ == "__main__":
     main()

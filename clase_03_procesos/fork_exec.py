@@ -1,20 +1,44 @@
 #!/usr/bin/env python3
-"""Fork + exec para ejecutar ls."""
+"""Función para ejecutar comandos."""
 import os
+import sys
 
-print(f"Padre (PID {os.getpid()}): voy a ejecutar 'ls -la'")
+def ejecutar(comando, args=None):
+    """
+    Ejecuta un comando y retorna su código de salida.
 
-pid = os.fork()
+    Args:
+        comando: nombre del programa a ejecutar
+        args: lista de argumentos (sin incluir el comando)
 
-if pid == 0:
-    # Hijo: transformarse en ls
-    print(f"Hijo (PID {os.getpid()}): haciendo exec...")
-    os.execlp("ls", "ls", "-la", "/tmp")
-    # Si llegamos aquí, exec falló
-    print("ERROR: exec falló")
-    os._exit(1)
-else:
-    # Padre: esperar
-    _, status = os.wait()
-    codigo = os.WEXITSTATUS(status)
-    print(f"\nPadre: ls terminó con código {codigo}")
+    Returns:
+        código de salida del comando
+    """
+    if args is None:
+        args = []
+
+    pid = os.fork()
+
+    if pid == 0:
+        try:
+            os.execvp(comando, [comando] + args)
+        except OSError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            os._exit(127)
+    else:
+        _, status = os.wait()
+        return os.WEXITSTATUS(status)
+
+# Probar la función
+if __name__ == "__main__":
+    print("=== Ejecutando ls ===")
+    codigo = ejecutar("ls", ["-la", "/tmp"])
+    print(f"Código de salida: {codigo}\n")
+
+    print("=== Ejecutando comando inexistente ===")
+    codigo = ejecutar("comando_que_no_existe")
+    print(f"Código de salida: {codigo}\n")
+
+    print("=== Ejecutando echo ===")
+    codigo = ejecutar("echo", ["Hola", "desde", "exec"])
+    print(f"Código de salida: {codigo}")

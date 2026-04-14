@@ -1,0 +1,18 @@
+total 28
+drwxrwxrwx 1 julia julia 4096 Apr 14 14:51 .
+drwxrwxrwx 1 julia julia 4096 Apr 14 12:06 ..
+-rwxrwxrwx 1 julia julia  901 Apr 14 14:36 explorar_fds.py
+-rwxrwxrwx 1 julia julia    0 Apr 14 14:51 listado.txt
+-rwxrwxrwx 1 julia julia 2272 Apr 14 14:46 minish.py
+-rwxrwxrwx 1 julia julia 1376 Apr 14 14:38 pipe_basico.py
+-rwxrwxrwx 1 julia julia 1376 Apr 14 14:38 pipe_bidireccional.py
+-rwxrwxrwx 1 julia julia  944 Apr 14 14:42 pipeline_dos.py
+-rwxrwxrwx 1 julia julia 1691 Apr 14 14:43 pipeline_tres.py
+-rwxrwxrwx 1 julia julia  644 Apr 14 14:36 redireccion_manual.py
+-rwxrwxrwx 1 julia julia 1145 Apr 14 14:38 separar_salidas.py
+-rwxrwxrwx 1 julia julia   68 Apr 14 14:37 solo_stderr.txt
+-rwxrwxrwx 1 julia julia   73 Apr 14 14:36 solo_stdout.txt
+-rwxrwxrwx 1 julia julia   68 Apr 14 14:37 stderr.txt
+-rwxrwxrwx 1 julia julia   73 Apr 14 14:37 stdout.txt
+-rwxrwxrwx 1 julia julia   13 Apr 14 14:51 test.txt
+-rwxrwxrwx 1 julia julia  141 Apr 14 14:37 todo.txt

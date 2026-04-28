@@ -21,3 +21,5 @@ with open(FIFO, 'w') as f:
         time.sleep(1)
 
 print("Escritura completada")
+
+#python3 escritor_fifo.py

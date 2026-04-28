@@ -10,3 +10,5 @@ with open(FIFO, 'r') as f:
         print(f"Recibido: {linea.strip()}")
 
 print("Lectura completada (el escritor cerró el pipe)")
+
+#python3 lector_fifo.py

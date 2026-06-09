@@ -44,3 +44,6 @@ if __name__ == "__main__":
         resultado = pool.apply_async(cuadrado, (10,))
         print(f"ready? {resultado.ready()}")
         print(f"resultado: {resultado.get()}")
+
+#cd clase_08_multiprocessing_avanzado ()
+#python3 ejercicio1.py

@@ -5,6 +5,8 @@ services:
     tty: true
     stdin_open: true
     pid: host
+    environment:
+      - PYTHONPATH=/app/src
     volumes:
       - ./src:/app/src
       - ./config.json:/app/config.json

@@ -25,15 +25,20 @@ class Agregador(Process):
         Cola de donde se consumen los mensajes de los analizadores.
     """
 
-    def __init__(self, snapshot, lock, queue: Queue):
+    def __init__(self, snapshot, lock, queue: Queue, verbose: bool = True):
         super().__init__()
         self.snapshot = snapshot
         self.lock = lock
         self.queue = queue
+        self.verbose = verbose
+
+    def _log(self, msg: str):
+        if self.verbose:
+            print(msg)
 
     def run(self):
         """Bucle principal del agregador."""
-        print(f"[Agregador] Iniciado (PID {self.pid})")
+        self._log(f"[Agregador] Iniciado (PID {self.pid})")
 
         while True:
             try:
@@ -42,19 +47,19 @@ class Agregador(Process):
 
                 # Señal de shutdown limpio (None en la queue).
                 if mensaje is None:
-                    print("[Agregador] Señal de fin recibida, terminando.")
+                    self._log("[Agregador] Señal de fin recibida, terminando.")
                     break
 
                 # Validación básica del mensaje.
                 if not isinstance(mensaje, dict):
-                    print(f"[Agregador] Mensaje ignorado (no es dict): {mensaje}")
+                    self._log(f"[Agregador] Mensaje ignorado (no es dict): {mensaje}")
                     continue
 
                 vista = mensaje.get("vista")
                 datos = mensaje.get("data")
 
                 if vista is None or datos is None:
-                    print(f"[Agregador] Mensaje mal formado: {mensaje}")
+                    self._log(f"[Agregador] Mensaje mal formado: {mensaje}")
                     continue
 
                 # Actualización atómica: datos + timestamp bajo lock.
@@ -62,10 +67,10 @@ class Agregador(Process):
                     self.snapshot[vista] = datos
                     self.snapshot["timestamps"][vista] = time.time()
 
-                print(f"[Agregador] Vista '{vista}' actualizada")
+                self._log(f"[Agregador] Vista '{vista}' actualizada")
 
             except Exception as exc:
                 # Si ocurre un error inesperado, loggeamos y seguimos para
                 # evitar que el agregador muera y deje a los demás procesos
                 # sin servicio.
-                print(f"[Agregador] Error: {exc}")
+                self._log(f"[Agregador] Error: {exc}")

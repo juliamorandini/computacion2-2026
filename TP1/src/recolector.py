@@ -24,15 +24,20 @@ class Recolector(Process):
         Segundos entre scans (default 2.0).
     """
 
-    def __init__(self, snapshot, intervalo: float = 2.0):
+    def __init__(self, snapshot, intervalo: float = 2.0, verbose: bool = True):
         super().__init__()
         self.snapshot = snapshot
         self.intervalo = intervalo
         self._detener = Event()
+        self.verbose = verbose
 
     def detener(self):
         """Señaliza al proceso que debe terminar su loop."""
         self._detener.set()
+
+    def _log(self, msg: str):
+        if self.verbose:
+            print(msg)
 
     @staticmethod
     def _listar_pids() -> list[int]:
@@ -60,7 +65,7 @@ class Recolector(Process):
 
     def run(self):
         """Bucle principal del recolector."""
-        print(f"[Recolector] Iniciado (PID {self.pid})")
+        self._log(f"[Recolector] Iniciado (PID {self.pid})")
 
         while not self._detener.is_set():
             pids = self._listar_pids()
@@ -73,4 +78,4 @@ class Recolector(Process):
             # Esperamos a que llegue la próxima iteración o la señal de stop.
             self._detener.wait(timeout=self.intervalo)
 
-        print("[Recolector] Finalizando.")
+        self._log("[Recolector] Finalizando.")

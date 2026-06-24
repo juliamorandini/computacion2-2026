@@ -11,7 +11,8 @@ Orquesta:
 import signal
 import time
 import sys
-from multiprocessing import Queue, Event
+import json
+from multiprocessing import Queue, Event, Value
 
 from display import Display
 from estado import crear_estado
@@ -24,6 +25,7 @@ from analizadores.threads import AnalizadorThreads
 from analizadores.senales import AnalizadorSenales
 from analizadores.scheduling import AnalizadorScheduling
 from analizadores.sistema import AnalizadorSistema
+from senales import SignalHandler
 
 
 # --------------------------------------------------------------------------- #
@@ -72,6 +74,32 @@ def _shutdown_limpio(instancias, agregador, recolector, queue):
     print("\n[Main] Todos los procesos finalizaron. Fin.")
 
 
+def _cargar_config(path: str = "config.json") -> dict:
+    """Carga configuración desde JSON. Retorna dict con defaults si falla."""
+    defaults = {
+        "intervals": {
+            "resumen": 2.0, "memoria": 3.0, "fds": 5.0,
+            "threads": 2.0, "senales": 10.0, "scheduling": 10.0, "sistema": 2.0
+        },
+        "min_intervals": {
+            "resumen": 0.5, "memoria": 1.0, "fds": 2.0,
+            "threads": 0.5, "senales": 5.0, "scheduling": 5.0, "sistema": 1.0
+        },
+        "default_sort": "cpu",
+        "verbose": False,
+    }
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        # Merge con defaults por si faltan claves
+        for k, v in defaults.items():
+            if k not in data:
+                data[k] = v
+        return data
+    except Exception:
+        return defaults
+
+
 def main():
     # Determinar modo
     es_batch = len(sys.argv) > 1 and sys.argv[1] == "--batch"
@@ -84,15 +112,15 @@ def main():
     # ------------------------------------------------------------------
     # Estado compartido y comunicación IPC
     # ------------------------------------------------------------------
-    snapshot, lock = crear_estado()
+    snapshot, lock, verbose_flag = crear_estado()
     queue = Queue()
     stop_event = Event()
 
     # ------------------------------------------------------------------
     # Lanzar Recolector y Agregador
-    # En modo TUI desactivamos verbose para no ensuciar la pantalla
-    recolector = Recolector(snapshot, intervalo=2.0, verbose=not es_tui)
-    agregador = Agregador(snapshot, lock, queue, verbose=not es_tui)
+    # verbose_flag.value controla logs en todos los procesos
+    recolector = Recolector(snapshot, intervalo=2.0, verbose_flag=verbose_flag)
+    agregador = Agregador(snapshot, lock, queue, verbose_flag=verbose_flag)
 
     recolector.start()
     agregador.start()
@@ -107,11 +135,28 @@ def main():
     # ------------------------------------------------------------------
     instancias: list[tuple[str, any]] = []
     for nombre, Clase, intervalo in ANALIZADORES:
-        inst = Clase(snapshot, queue, intervalo_inicial=intervalo)
+        inst = Clase(snapshot, queue, intervalo_inicial=intervalo, verbose_flag=verbose_flag)
         inst.start()
         instancias.append((nombre, inst))
         if es_batch:
             print(f"[Main] Analizador {nombre} iniciado (PID {inst.pid}).")
+
+    # ------------------------------------------------------------------
+    # Configurar manejador de señales (solo en modo TUI)
+    # ------------------------------------------------------------------
+    signal_handler = None
+    if es_tui:
+        config = _cargar_config()
+        # Pasamos la lista de (nombre, instancia) para poder ajustar intervalos
+        analizadores_dict = {nombre.lower(): inst for nombre, inst in instancias}
+        signal_handler = SignalHandler(
+            stop_event=stop_event,
+            verbose_flag=verbose_flag,
+            analizadores=analizadores_dict,
+            config_path="config.json",
+            snapshot=snapshot,
+        )
+        signal_handler.install()
 
     # ------------------------------------------------------------------
     # Modo batch: espera y muestra snapshot
@@ -169,13 +214,16 @@ def main():
     time.sleep(1.0)
 
     # Instanciar y arrancar la TUI (bloquea hasta que cierra)
-    display = Display(snapshot, stop_event, refresh_rate=1.0)
+    signal_pipe_fd = signal_handler.get_self_pipe_read_fd() if signal_handler else None
+    display = Display(snapshot, stop_event, refresh_rate=1.0, signal_pipe_fd=signal_pipe_fd)
     try:
         display.run()
     except KeyboardInterrupt:
         stop_event.set()
     finally:
         stop_event.set()
+        if signal_handler:
+            signal_handler.cleanup()
 
     # Al cerrar la TUI, hacer shutdown de todo
     _shutdown_limpio(instancias, agregador, recolector, queue)

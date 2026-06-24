@@ -9,6 +9,8 @@ que cada uno tenga que escanear /proc por su cuenta.
 import os
 import time
 from multiprocessing import Process, Event
+from multiprocessing.synchronize import Event as EventType
+from multiprocessing.sharedctypes import Synchronized
 
 
 class Recolector(Process):
@@ -22,21 +24,28 @@ class Recolector(Process):
         ``Manager().dict()`` compartido.
     intervalo : float, optional
         Segundos entre scans (default 2.0).
+    verbose_flag : Synchronized (Value("b"))
+        Bandera booleana compartida para activar/desactivar logs.
     """
 
-    def __init__(self, snapshot, intervalo: float = 2.0, verbose: bool = True):
+    def __init__(
+        self,
+        snapshot,
+        intervalo: float = 2.0,
+        verbose_flag: Synchronized | None = None,
+    ):
         super().__init__()
         self.snapshot = snapshot
         self.intervalo = intervalo
         self._detener = Event()
-        self.verbose = verbose
+        self.verbose_flag = verbose_flag
 
     def detener(self):
         """Señaliza al proceso que debe terminar su loop."""
         self._detener.set()
 
     def _log(self, msg: str):
-        if self.verbose:
+        if self.verbose_flag and self.verbose_flag.value:
             print(msg)
 
     @staticmethod

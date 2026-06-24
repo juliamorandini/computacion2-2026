@@ -12,6 +12,7 @@ sin necesidad de reiniciar el proceso.
 
 import time
 from multiprocessing import Process, Event, Value
+from multiprocessing.sharedctypes import Synchronized
 from typing import Optional
 
 
@@ -29,6 +30,8 @@ class BaseAnalizador(Process):
         (ej. ``"resumen"``, ``"memoria"``, ...).
     intervalo_inicial : float
         Segundos entre refrescos (por defecto ``2.0``).
+    verbose_flag : Synchronized (Value("b")), optional
+        Bandera booleana compartida para activar/desactivar logs.
     """
 
     def __init__(
@@ -37,6 +40,7 @@ class BaseAnalizador(Process):
         queue,
         nombre_vista: str,
         intervalo_inicial: float = 2.0,
+        verbose_flag: Synchronized | None = None,
     ):
         super().__init__()
         self.snapshot = snapshot
@@ -47,10 +51,15 @@ class BaseAnalizador(Process):
         self.intervalo = Value("d", intervalo_inicial)
         self._detener = Event()
         self._tiempo_anterior = time.time()
+        self.verbose_flag = verbose_flag
 
     # --------------------------------------------------------------------- #
     # Control de ciclo de vida
     # --------------------------------------------------------------------- #
+
+    def _log(self, msg: str):
+        if self.verbose_flag and self.verbose_flag.value:
+            print(msg)
 
     def detener(self):
         """Señaliza al proceso que debe terminar el bucle principal."""

@@ -7,13 +7,20 @@ ignoradas (SigIgn), con handler propio (SigCgt), y pendientes
 
 from analizadores.base import BaseAnalizador
 from procfs import leer_status
+from multiprocessing.sharedctypes import Synchronized
 
 
 class AnalizadorSenales(BaseAnalizador):
     """Analizador de la vista *Señales*."""
 
-    def __init__(self, snapshot, queue, intervalo_inicial: float = 10.0):
-        super().__init__(snapshot, queue, "senales", intervalo_inicial)
+    def __init__(
+        self,
+        snapshot,
+        queue,
+        intervalo_inicial: float = 10.0,
+        verbose_flag: Synchronized | None = None,
+    ):
+        super().__init__(snapshot, queue, "senales", intervalo_inicial, verbose_flag)
 
     def analizar(self, pid: int) -> dict | None:
         """Decodifica las máscaras hex de señales a nombres legibles."""

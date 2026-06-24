@@ -7,6 +7,7 @@ threads, UID/GID, usuario, línea de comandos y porcentaje de CPU.
 import os
 from analizadores.base import BaseAnalizador
 from procfs import leer_stat, leer_status, leer_cmdline, uid_a_usuario
+from multiprocessing.sharedctypes import Synchronized
 
 
 class AnalizadorResumen(BaseAnalizador):
@@ -14,8 +15,14 @@ class AnalizadorResumen(BaseAnalizador):
     Analizador de la vista *Resumen*.
     """
 
-    def __init__(self, snapshot, queue, intervalo_inicial: float = 2.0):
-        super().__init__(snapshot, queue, "resumen", intervalo_inicial)
+    def __init__(
+        self,
+        snapshot,
+        queue,
+        intervalo_inicial: float = 2.0,
+        verbose_flag: Synchronized | None = None,
+    ):
+        super().__init__(snapshot, queue, "resumen", intervalo_inicial, verbose_flag)
         # Cache local para cálculo de delta de CPU (jiffies).
         self._prev_cpu = {}
 

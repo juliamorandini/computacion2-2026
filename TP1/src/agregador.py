@@ -8,6 +8,7 @@ encarga de actualizar el ``Manager().dict()`` de forma atómica bajo un único
 
 from multiprocessing import Process, Queue
 import time
+from multiprocessing.sharedctypes import Synchronized
 
 
 class Agregador(Process):
@@ -23,17 +24,25 @@ class Agregador(Process):
         Lock para proteger actualizaciones compuestas.
     queue : multiprocessing.Queue
         Cola de donde se consumen los mensajes de los analizadores.
+    verbose_flag : Synchronized (Value("b"))
+        Bandera booleana compartida para activar/desactivar logs.
     """
 
-    def __init__(self, snapshot, lock, queue: Queue, verbose: bool = True):
+    def __init__(
+        self,
+        snapshot,
+        lock,
+        queue: Queue,
+        verbose_flag: Synchronized | None = None,
+    ):
         super().__init__()
         self.snapshot = snapshot
         self.lock = lock
         self.queue = queue
-        self.verbose = verbose
+        self.verbose_flag = verbose_flag
 
     def _log(self, msg: str):
-        if self.verbose:
+        if self.verbose_flag and self.verbose_flag.value:
             print(msg)
 
     def run(self):

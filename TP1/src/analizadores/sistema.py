@@ -7,13 +7,20 @@ Lee archivos globales de /proc, NO por PID.
 
 import os
 from analizadores.base import BaseAnalizador
+from multiprocessing.sharedctypes import Synchronized
 
 
 class AnalizadorSistema(BaseAnalizador):
     """Analizador de la vista *Sistema* (stats globales)."""
 
-    def __init__(self, snapshot, queue, intervalo_inicial: float = 2.0):
-        super().__init__(snapshot, queue, "sistema", intervalo_inicial)
+    def __init__(
+        self,
+        snapshot,
+        queue,
+        intervalo_inicial: float = 2.0,
+        verbose_flag: Synchronized | None = None,
+    ):
+        super().__init__(snapshot, queue, "sistema", intervalo_inicial, verbose_flag)
         self._prev_cpu_vals = None
 
     def analizar(self, pid: int) -> dict | None:

@@ -7,13 +7,20 @@ cantidad de CPU usada (delta de jiffies entre lecturas).
 import os
 from analizadores.base import BaseAnalizador
 from procfs import leer_task
+from multiprocessing.sharedctypes import Synchronized
 
 
 class AnalizadorThreads(BaseAnalizador):
     """Analizador de la vista *Threads*."""
 
-    def __init__(self, snapshot, queue, intervalo_inicial: float = 2.0):
-        super().__init__(snapshot, queue, "threads", intervalo_inicial)
+    def __init__(
+        self,
+        snapshot,
+        queue,
+        intervalo_inicial: float = 2.0,
+        verbose_flag: Synchronized | None = None,
+    ):
+        super().__init__(snapshot, queue, "threads", intervalo_inicial, verbose_flag)
         # Cache para delta de CPU por TID: {tid: (utime, stime)}
         self._prev_cpu = {}
 

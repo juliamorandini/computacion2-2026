@@ -7,6 +7,7 @@ VmStk, VmExe, VmLib, VmHWM, VmSwap, page faults y segmentos agrupados
 
 from analizadores.base import BaseAnalizador
 from procfs import leer_status, leer_maps
+from multiprocessing.sharedctypes import Synchronized
 
 
 class AnalizadorMemoria(BaseAnalizador):
@@ -26,8 +27,14 @@ class AnalizadorMemoria(BaseAnalizador):
         "VmSwap",   # Memoria en swap (KB)
     ]
 
-    def __init__(self, snapshot, queue, intervalo_inicial: float = 3.0):
-        super().__init__(snapshot, queue, "memoria", intervalo_inicial)
+    def __init__(
+        self,
+        snapshot,
+        queue,
+        intervalo_inicial: float = 3.0,
+        verbose_flag: Synchronized | None = None,
+    ):
+        super().__init__(snapshot, queue, "memoria", intervalo_inicial, verbose_flag)
 
     def analizar(self, pid: int) -> dict | None:
         status = leer_status(pid)

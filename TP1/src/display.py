@@ -9,6 +9,7 @@ Características:
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import threading
@@ -74,7 +75,13 @@ class Display:
     # Teclas de navegación
     TECLAS_VISTA = {str(i): nombre for i, nombre in enumerate(VISTAS, start=1)}
 
-    def __init__(self, snapshot, stop_event: Event, refresh_rate: float = 1.0):
+    def __init__(
+        self,
+        snapshot,
+        stop_event: Event,
+        refresh_rate: float = 1.0,
+        signal_pipe_fd: int | None = None,
+    ):
         self.snapshot = snapshot
         self.stop_event = stop_event
         self.refresh_rate = refresh_rate
@@ -82,6 +89,7 @@ class Display:
         self._lock = threading.Lock()
         self._last_key: str | None = None
         self._console = Console()
+        self._signal_pipe_fd = signal_pipe_fd
 
     # ------------------------------------------------------------------ #
     #  Propiedades / utilidades
@@ -411,40 +419,69 @@ class Display:
     # ------------------------------------------------------------------ #
 
     def _input_loop(self):
-        """Lee teclas de stdin en un thread separado."""
+        """Lee teclas de stdin y señales del self-pipe en un thread separado."""
         import select
         import termios
         import tty
 
         old_settings = termios.tcgetattr(sys.stdin)
-        try:
-            tty.setcbreak(sys.stdin.fileno())
-            while not self.stop_event.is_set():
-                if select.select([sys.stdin], [], [], 0.1)[0]:
-                    ch = sys.stdin.read(1)
-                    if ch in self.TECLAS_VISTA:
-                        self.set_vista(VISTAS.index(self.TECLAS_VISTA[ch]))
-                    elif ch == "q":
-                        self.stop_event.set()
-                    elif ch in ("\x1b",):  # Escape key sequences
-                        # Flechas: leer 2 chars más
-                        if select.select([sys.stdin], [], [], 0.05)[0]:
-                            ch2 = sys.stdin.read(1)
-                            if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
-                                ch3 = sys.stdin.read(1)
-                                if ch3 == "C":  # Right arrow
-                                    self.siguiente_vista()
-                                elif ch3 == "D":  # Left arrow
-                                    self.anterior_vista()
-                    elif ch == "+":
-                        self.refresh_rate = min(INTERVALO_MAX, self.refresh_rate + 0.1)
-                    elif ch == "-":
-                        self.refresh_rate = max(INTERVALO_MIN, self.refresh_rate - 0.1)
-                    # 'r' — no-op: Live ya refresca automáticamente
+        stdin_fd = sys.stdin.fileno()
 
-                    self._last_key = ch
+        # FDs a vigilar: stdin + signal pipe (si existe)
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                # select con timeout para no bloquear indefinidamente
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        # Señal recibida - procesar y forzar refresh
+                        self._procesar_signal_pipe()
         finally:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+    def _procesar_tecla(self, ch: str):
+        """Procesa una tecla individual (extraído de _input_loop)."""
+        if ch in self.TECLAS_VISTA:
+            self.set_vista(VISTAS.index(self.TECLAS_VISTA[ch]))
+        elif ch == "q":
+            self.stop_event.set()
+        elif ch in ("\x1b",):  # Escape key sequences
+            # Flechas: leer 2 chars más
+            import select
+            if select.select([sys.stdin], [], [], 0.05)[0]:
+                ch2 = sys.stdin.read(1)
+                if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch3 = sys.stdin.read(1)
+                    if ch3 == "C":  # Right arrow
+                        self.siguiente_vista()
+                    elif ch3 == "D":  # Left arrow
+                        self.anterior_vista()
+        elif ch == "+":
+            self.refresh_rate = min(INTERVALO_MAX, self.refresh_rate + 0.1)
+        elif ch == "-":
+            self.refresh_rate = max(INTERVALO_MIN, self.refresh_rate - 0.1)
+        # 'r' — no-op: Live ya refresca automáticamente
+
+        self._last_key = ch
+
+    def _procesar_signal_pipe(self):
+        """Drena el self-pipe; el SignalHandler principal procesa las señales."""
+        # Solo leer y descartar aqui - el SignalHandler en main thread procesa
+        # Esto evita que el pipe se llene y bloquee el handler async-signal-safe
+        try:
+            os.read(self._signal_pipe_fd, 1024)
+        except (OSError, BlockingIOError):
+            pass
+        # Forzar refresh inmediato al recibir señal
+        # (rich.Live se actualiza en el próximo ciclo del run loop)
 
     # ------------------------------------------------------------------ #
     #  Ciclo principal
@@ -466,7 +503,23 @@ class Display:
             ) as live:
                 while not self.stop_event.is_set():
                     live.update(self._build_layout())
-                    time.sleep(self.refresh_rate)
+                    # Usar select en lugar de sleep para responder a señales/pipe
+                    # Timeout = refresh_rate para mantener tasa de refresco
+                    import select
+                    read_fds = []
+                    if self._signal_pipe_fd is not None:
+                        read_fds.append(self._signal_pipe_fd)
+                    # No agregamos stdin porque ya lo vigila el thread de input
+
+                    if read_fds:
+                        ready, _, _ = select.select(read_fds, [], [], self.refresh_rate)
+                        if ready:
+                            # Señal recibida - procesar inmediatamente y forzar refresh
+                            self._procesar_signal_pipe()
+                            continue  # refresh inmediato sin esperar refresh_rate
+                    else:
+                        # Sin signal pipe, usar sleep simple
+                        time.sleep(self.refresh_rate)
         except KeyboardInterrupt:
             self.stop_event.set()
         finally:

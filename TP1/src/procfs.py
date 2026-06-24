@@ -189,6 +189,9 @@ def _parsear_stat(contenido: str) -> dict:
         "vsize": int(resto[20]) if len(resto) > 20 else None,
         "rss": int(resto[21]) if len(resto) > 21 else None,
         "rsslim": int(resto[22]) if len(resto) > 22 else None,
+        # Campos de scheduling (índices 39 y 40 en resto = campos 40 y 41 en stat)
+        "rt_priority": int(resto[39]) if len(resto) > 39 else None,
+        "policy": int(resto[40]) if len(resto) > 40 else None,
     }
 
 
@@ -215,6 +218,7 @@ def _parsear_status(contenido: str) -> dict:
     Parsea el contenido de /proc/<pid>/status.
     Retorna dict con pares key: value.
     Para campos de señales (hex), devuelve lista de nombres.
+    Para campos en kB (VmSize, VmRSS, etc.), extrae el entero.
     """
     resultado: dict = {}
     for linea in contenido.splitlines():
@@ -227,8 +231,15 @@ def _parsear_status(contenido: str) -> dict:
         # Campos hex de señales
         if key in ("SigPnd", "ShdPnd", "SigBlk", "SigIgn", "SigCgt"):
             resultado[key] = _parsear_signal_hex(value)
+        # Campos numéricos simples
         elif value.isdigit():
             resultado[key] = int(value)
+        # Campos con unidades (ej: "123456 kB")
+        elif value.endswith(" kB"):
+            try:
+                resultado[key] = int(value[:-3].strip())
+            except ValueError:
+                resultado[key] = value
         else:
             resultado[key] = value
 

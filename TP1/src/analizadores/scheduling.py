@@ -6,6 +6,7 @@ política de scheduling, RT priority, CPU affinity y context switches.
 
 from analizadores.base import BaseAnalizador
 from procfs import leer_stat, leer_status
+from multiprocessing.sharedctypes import Synchronized
 
 
 class AnalizadorScheduling(BaseAnalizador):
@@ -20,8 +21,14 @@ class AnalizadorScheduling(BaseAnalizador):
         5: "SCHED_IDLE",
     }
 
-    def __init__(self, snapshot, queue, intervalo_inicial: float = 10.0):
-        super().__init__(snapshot, queue, "scheduling", intervalo_inicial)
+    def __init__(
+        self,
+        snapshot,
+        queue,
+        intervalo_inicial: float = 10.0,
+        verbose_flag: Synchronized | None = None,
+    ):
+        super().__init__(snapshot, queue, "scheduling", intervalo_inicial, verbose_flag)
 
     def analizar(self, pid: int) -> dict | None:
         stat = leer_stat(pid)

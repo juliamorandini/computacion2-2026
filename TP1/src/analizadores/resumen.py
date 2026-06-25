@@ -5,6 +5,7 @@ threads, UID/GID, usuario, línea de comandos y porcentaje de CPU.
 """
 
 import os
+import time
 from analizadores.base import BaseAnalizador
 from procfs import leer_stat, leer_status, leer_cmdline, uid_a_usuario
 from multiprocessing.sharedctypes import Synchronized
@@ -24,7 +25,13 @@ class AnalizadorResumen(BaseAnalizador):
     ):
         super().__init__(snapshot, queue, "resumen", intervalo_inicial, verbose_flag)
         # Cache local para cálculo de delta de CPU (jiffies).
-        self._prev_cpu = {}
+        # Guardamos tupla: (total_jiffies, timestamp)
+        self._prev_cpu: dict[int, tuple[int, float]] = {}
+
+    def _limpiar_caches(self, pids_actuales: list[int]):
+        """Elimina del cache _prev_cpu los PIDs que ya no están activos."""
+        vivos = set(pids_actuales)
+        self._prev_cpu = {pid: v for pid, v in self._prev_cpu.items() if pid in vivos}
 
     # ----------------------------------------------------------------- #
     # Helpers de parseo (status puede devolver strings para Uid/Gid)
@@ -83,23 +90,30 @@ class AnalizadorResumen(BaseAnalizador):
         gid = self._parsear_gid(status)
         usuario = uid_a_usuario(uid) if uid is not None else None
 
-        # -- CPU% (delta de jiffies) ----------------------------------
+        # -- CPU% (delta de jiffies con tiempo real por PID) -------------
         total = utime + stime
-        prev = self._prev_cpu.get(pid, total)
-        delta = total - prev
-        self._prev_cpu[pid] = total
+        ahora = time.time()
 
-        try:
-            clk_tck = os.sysconf("SC_CLK_TCK")
-        except (ValueError, AttributeError):
-            # Fallback para entornos que no sean Linux (ej. desarrollo en Windows)
-            clk_tck = 100
-
-        delta_t = getattr(self, "_delta_t", self.intervalo.value)
-        if delta_t > 0 and delta > 0:
-            cpu_pct = 100.0 * delta / (clk_tck * delta_t)
+        if pid in self._prev_cpu:
+            prev_total, prev_time = self._prev_cpu[pid]
+            delta_jiffies = total - prev_total
+            delta_t_real = ahora - prev_time
+            if delta_t_real > 0 and delta_jiffies > 0:
+                try:
+                    clk_tck = os.sysconf("SC_CLK_TCK")
+                except (ValueError, AttributeError):
+                    clk_tck = 100
+                cpu_pct = 100.0 * delta_jiffies / (clk_tck * delta_t_real)
+                # Cap a 100% por core (aprox), para evitar valores imposibles
+                cpu_pct = min(cpu_pct, 100.0)
+            else:
+                cpu_pct = 0.0
         else:
+            # Primera vez que vemos este PID: no hay delta, retornamos 0
             cpu_pct = 0.0
+
+        # Actualizar cache SIEMPRE (incluso en primera vez)
+        self._prev_cpu[pid] = (total, ahora)
 
         return {
             "pid": pid,

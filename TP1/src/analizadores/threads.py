@@ -5,8 +5,9 @@ cantidad de CPU usada (delta de jiffies entre lecturas).
 """
 
 import os
+import time
 from analizadores.base import BaseAnalizador
-from procfs import leer_task
+from procfs import leer_task, leer_status, leer_task_status
 from multiprocessing.sharedctypes import Synchronized
 
 
@@ -21,8 +22,22 @@ class AnalizadorThreads(BaseAnalizador):
         verbose_flag: Synchronized | None = None,
     ):
         super().__init__(snapshot, queue, "threads", intervalo_inicial, verbose_flag)
-        # Cache para delta de CPU por TID: {tid: (utime, stime)}
-        self._prev_cpu = {}
+        # Cache para delta de CPU por TID: {tid: (total_jiffies, timestamp)}
+        self._prev_cpu: dict[int, tuple[int, float]] = {}
+
+    def _limpiar_caches(self, pids_actuales: list[int]):
+        """
+        Elimina del cache _prev_cpu los TIDs de procesos que ya no existen.
+        Como no tenemos la lista de TIDs vivos fácilmente, limpiamos de forma conservadora:
+        si el PID padre no está en pids_actuales, borramos todos sus TIDs.
+        """
+        vivos = set(pids_actuales)
+        # El cache puede tener TIDs de muchos PIDs; para simplificar,
+        # limitamos el tamaño máximo del cache.
+        if len(self._prev_cpu) > 5000:
+            # Borramos los más antiguos (por timestamp) si crece demasiado
+            items = sorted(self._prev_cpu.items(), key=lambda x: x[1][1])
+            self._prev_cpu = dict(items[-2500:])
 
     def analizar(self, pid: int) -> list | None:
         """
@@ -73,25 +88,40 @@ class AnalizadorThreads(BaseAnalizador):
         except Exception:
             nombre = "<unknown>"
 
-        # Calcular CPU% con delta
+        # Calcular CPU% con delta (tiempo real por TID)
         total_cpu = utime + stime
+        ahora = time.time()
         cpu_pct = 0.0
+
         if tid in self._prev_cpu:
-            prev = self._prev_cpu[tid]
-            delta = total_cpu - prev
-            if delta > 0:
-                # Delta de jiffies a porcentaje
-                delta_t = getattr(self, "_delta_t", self.intervalo.value)
+            prev_total, prev_time = self._prev_cpu[tid]
+            delta_jiffies = total_cpu - prev_total
+            delta_t_real = ahora - prev_time
+            if delta_t_real > 0 and delta_jiffies > 0:
                 try:
                     clk_tck = os.sysconf("SC_CLK_TCK")
                 except (ValueError, AttributeError):
                     clk_tck = 100
-                cpu_pct = 100.0 * delta / (clk_tck * delta_t) if delta_t > 0 else 0.0
-        self._prev_cpu[tid] = total_cpu
+                cpu_pct = 100.0 * delta_jiffies / (clk_tck * delta_t_real)
+                cpu_pct = min(cpu_pct, 100.0)  # cap a 100%
+            else:
+                cpu_pct = 0.0
+        else:
+            cpu_pct = 0.0
+
+        # Actualizar cache SIEMPRE
+        self._prev_cpu[tid] = (total_cpu, ahora)
+
+        # Context switches del thread (de /proc/<pid>/task/<tid>/status)
+        status = leer_task_status(pid, tid)
+        voluntary_ctxt = status.get("voluntary_ctxt_switches") if status else None
+        nonvoluntary_ctxt = status.get("nonvoluntary_ctxt_switches") if status else None
 
         return {
             "tid": tid,
             "nombre": nombre,
             "estado": estado,
             "cpu_pct": round(cpu_pct, 2),
+            "voluntary_ctxt_switches": voluntary_ctxt,
+            "nonvoluntary_ctxt_switches": nonvoluntary_ctxt,
         }

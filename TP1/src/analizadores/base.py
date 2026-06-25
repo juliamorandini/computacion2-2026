@@ -65,6 +65,13 @@ class BaseAnalizador(Process):
         """Señaliza al proceso que debe terminar el bucle principal."""
         self._detener.set()
 
+    def _limpiar_caches(self, pids_actuales: list[int]):
+        """
+        Hook para que subclases limpien caches de PIDs/TIDs que ya no existen.
+        Por defecto no hace nada.
+        """
+        pass
+
     def run(self):
         """Bucle principal del analizador.
 
@@ -80,6 +87,9 @@ class BaseAnalizador(Process):
             self._tiempo_anterior = ahora
 
             pids = self.snapshot.get("pids", [])
+            # Limpiar caches de PIDs que ya no están vivos
+            self._limpiar_caches(pids)
+
             vista_data: dict = {}
 
             for pid in pids:

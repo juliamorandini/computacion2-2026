@@ -2,8 +2,9 @@
 
 Usa ``rich`` para renderizar en vivo las 7 vistas del snapshot.
 Características:
-- Navegación con teclas 1–7 (q para salir)
-- Refresh periódico configurable (+ / -)
+- Navegación con teclas 1–7 y r/m/f/t/s/p/g
+- Navegación lista: ↑↓, Enter (pin), / (filtro nombre), u (filtro usuario), c (orden)
+- Refresh periódico configurable (+ / -) que ajusta intervalo del analizador real
 - No bloquea los analizadores (lee ``snapshot`` en modo read-only)
 """
 
@@ -14,6 +15,7 @@ import sys
 import time
 import threading
 from multiprocessing.synchronize import Event
+from multiprocessing.sharedctypes import Synchronized
 
 from rich.console import Console
 from rich.live import Live
@@ -51,6 +53,9 @@ NOMBRE_VISTA = {
 INTERVALO_MIN = 0.1
 INTERVALO_MAX = 10.0
 
+# Ordenes disponibles
+SORT_MODES = ["cpu", "rss", "pid"]
+
 
 # --------------------------------------------------------------------------- #
 #  Clase principal
@@ -70,10 +75,26 @@ class Display:
         Evento multiprocessing que señaliza el fin de la aplicación.
     refresh_rate : float
         Segundos entre refrescos de pantalla (por defecto 1.0).
+    signal_pipe_fd : int, optional
+        File descriptor del self-pipe para recibir señales.
+    signal_handler : SignalHandler, optional
+        Instancia del manejador de señales para procesar señales pendientes.
+    analizador_intervals : dict[str, Synchronized], optional
+        Dict vista -> Value("d") compartido para ajustar intervalo en caliente.
     """
 
     # Teclas de navegación
     TECLAS_VISTA = {str(i): nombre for i, nombre in enumerate(VISTAS, start=1)}
+    # Alias de letras según consigna: r/m/f/t/s/p/g
+    TECLAS_VISTA_LETRAS = {
+        "r": "resumen",
+        "m": "memoria",
+        "f": "fds",
+        "t": "threads",
+        "s": "senales",
+        "p": "scheduling",
+        "g": "sistema",
+    }
 
     def __init__(
         self,
@@ -81,6 +102,8 @@ class Display:
         stop_event: Event,
         refresh_rate: float = 1.0,
         signal_pipe_fd: int | None = None,
+        signal_handler=None,
+        analizador_intervals: dict[str, Synchronized] | None = None,
     ):
         self.snapshot = snapshot
         self.stop_event = stop_event
@@ -90,6 +113,17 @@ class Display:
         self._last_key: str | None = None
         self._console = Console()
         self._signal_pipe_fd = signal_pipe_fd
+        self._signal_handler = signal_handler
+        self._analizador_intervals = analizador_intervals or {}
+
+        # --- Estado de navegación y filtrado ---
+        self._selected_idx: int = 0          # Índice de fila seleccionada
+        self._pinned_pid: int | None = None  # PID "pineado" (Enter)
+        self._filter_name: str = ""          # Filtro por nombre de comando
+        self._filter_user: str = ""          # Filtro por usuario
+        self._sort_mode: str = "cpu"         # "cpu" | "rss" | "pid"
+        self._filter_mode: str | None = None # "name" | "user" | None (input mode)
+        self._filter_buffer: str = ""        # Buffer mientras se escribe filtro
 
     # ------------------------------------------------------------------ #
     #  Propiedades / utilidades
@@ -130,6 +164,69 @@ class Display:
         return f"{kb} KB"
 
     # ------------------------------------------------------------------ #
+    #  Helpers de lista filtrada/ordenada
+    # ------------------------------------------------------------------ #
+
+    def _get_vista_data(self) -> dict:
+        """Retorna el dict de datos de la vista actual: {pid: datos}."""
+        return self._snapshot_val(self.vista_actual, {})
+
+    def _build_filtered_sorted_pids(self) -> list[tuple[int, dict]]:
+        """
+        Construye lista de (pid, datos) filtrada y ordenada para la vista actual.
+        Retorna lista de tuplas lista para renderizar.
+        """
+        data = self._get_vista_data()
+        if not isinstance(data, dict):
+            return []
+
+        items = [(pid, datos) for pid, datos in data.items()]
+
+        # Filtrar por nombre de comando
+        if self._filter_name:
+            filtro = self._filter_name.lower()
+            items = [
+                (pid, d) for pid, d in items
+                if filtro in (d.get("cmdline", "") or "").lower()
+            ]
+
+        # Filtrar por usuario
+        if self._filter_user:
+            filtro = self._filter_user.lower()
+            items = [
+                (pid, d) for pid, d in items
+                if filtro in (str(d.get("usuario", "")) or "").lower()
+            ]
+
+        # Ordenar
+        if self._sort_mode == "cpu":
+            items.sort(key=lambda x: x[1].get("cpu_pct", 0), reverse=True)
+        elif self._sort_mode == "rss":
+            # RSS puede estar en vmrss (memoria) o rss (resumen)
+            def get_rss(d):
+                return d.get("vmrss") or d.get("rss") or 0
+            items.sort(key=lambda x: get_rss(x[1]), reverse=True)
+        elif self._sort_mode == "pid":
+            items.sort(key=lambda x: x[0])
+
+        return items
+
+    def _is_row_selected(self, pid: int, row_idx: int) -> bool:
+        """Determina si una fila debe destacarse (seleccionada o pineada)."""
+        if self._pinned_pid is not None:
+            return pid == self._pinned_pid
+        return row_idx == self._selected_idx
+
+    def _adjust_selected_idx(self, max_idx: int):
+        """Ajusta _selected_idx para que esté dentro de rango válido."""
+        if max_idx <= 0:
+            self._selected_idx = 0
+        elif self._selected_idx >= max_idx:
+            self._selected_idx = max_idx - 1
+        elif self._selected_idx < 0:
+            self._selected_idx = 0
+
+    # ------------------------------------------------------------------ #
     #  Renderizado de vistas
     # ------------------------------------------------------------------ #
 
@@ -147,9 +244,12 @@ class Display:
         tabla.add_column("CPU%", justify="right", style="red")
         tabla.add_column("Cmdline", style="white")
 
-        pids = self._snapshot_val("resumen", {})
+        items = self._build_filtered_sorted_pids()
+        self._adjust_selected_idx(len(items))
 
-        for pid, datos in pids.items():
+        for row_idx, (pid, datos) in enumerate(items):
+            selected = self._is_row_selected(pid, row_idx)
+            style = "bold reverse" if selected else ""
             tabla.add_row(
                 str(pid),
                 str(datos.get("ppid", "")),
@@ -158,7 +258,18 @@ class Display:
                 str(datos.get("usuario", "") or "?"),
                 f"{datos.get('cpu_pct', 0):.1f}%",
                 (datos.get("cmdline", "") or "")[:60],
+                style=style if selected else None,
             )
+
+        # Indicador de filtro/orden en título
+        if self._filter_name or self._filter_user or self._sort_mode != "cpu":
+            info = []
+            if self._filter_name:
+                info.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                info.append(f"user={self._filter_user}")
+            info.append(f"orden={self._sort_mode}")
+            tabla.title = f"[bold green]Vista: Resumen[/bold green]  [dim]({' | '.join(info)})[/dim]"
 
         return tabla
 
@@ -177,23 +288,32 @@ class Display:
         tabla.add_column("MinFlt", justify="right")
         tabla.add_column("MajFlt", justify="right")
 
-        pids = self._snapshot_val("memoria", {})
-        for pid, datos in pids.items():
+        items = self._build_filtered_sorted_pids()
+        self._adjust_selected_idx(len(items))
+
+        for row_idx, (pid, datos) in enumerate(items):
+            selected = self._is_row_selected(pid, row_idx)
+            style = "bold reverse" if selected else None
             tabla.add_row(
                 str(pid),
-                self._fmt_kb(datos.get("vmsize"))
-                if datos.get("vmsize") is not None else "",
-                self._fmt_kb(datos.get("vmrss"))
-                if datos.get("vmrss") is not None else "",
-                self._fmt_kb(datos.get("vmdata"))
-                if datos.get("vmdata") is not None else "",
-                self._fmt_kb(datos.get("vmstk"))
-                if datos.get("vmstk") is not None else "",
-                self._fmt_kb(datos.get("vmswap"))
-                if datos.get("vmswap") is not None else "",
+                self._fmt_kb(datos.get("vmsize")) if datos.get("vmsize") is not None else "",
+                self._fmt_kb(datos.get("vmrss")) if datos.get("vmrss") is not None else "",
+                self._fmt_kb(datos.get("vmdata")) if datos.get("vmdata") is not None else "",
+                self._fmt_kb(datos.get("vmstk")) if datos.get("vmstk") is not None else "",
+                self._fmt_kb(datos.get("vmswap")) if datos.get("vmswap") is not None else "",
                 str(datos.get("minflt", "")),
                 str(datos.get("majflt", "")),
+                style=style,
             )
+
+        if self._filter_name or self._filter_user or self._sort_mode != "rss":
+            info = []
+            if self._filter_name:
+                info.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                info.append(f"user={self._filter_user}")
+            info.append(f"orden={self._sort_mode}")
+            tabla.title = f"[bold green]Vista: Memoria[/bold green]  [dim]({' | '.join(info)})[/dim]"
 
         return tabla
 
@@ -208,19 +328,33 @@ class Display:
         tabla.add_column("Tipo", style="yellow")
         tabla.add_column("Target", style="white")
 
-        pids = self._snapshot_val("fds", {})
-        for pid, datos in pids.items():
+        items = self._build_filtered_sorted_pids()
+        self._adjust_selected_idx(len(items))
+
+        for row_idx, (pid, datos) in enumerate(items):
+            selected = self._is_row_selected(pid, row_idx)
+            style = "bold reverse" if selected else None
             if not isinstance(datos, list):
                 continue
-            for fd_info in datos[:10]:  # Limitar para no explotar la tabla
+            for fd_info in datos[:10]:
                 tabla.add_row(
                     str(pid),
                     str(fd_info.get("fd", "")),
                     fd_info.get("type", "?"),
                     fd_info.get("target", "")[:70],
+                    style=style,
                 )
             if len(datos) > 10:
-                tabla.add_row("", "", "...", f"... y {len(datos)-10} más")
+                tabla.add_row("", "", "...", f"... y {len(datos)-10} más", style=style)
+
+        if self._filter_name or self._filter_user or self._sort_mode != "pid":
+            info = []
+            if self._filter_name:
+                info.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                info.append(f"user={self._filter_user}")
+            info.append(f"orden={self._sort_mode}")
+            tabla.title = f"[bold green]Vista: File Descriptors[/bold green]  [dim]({' | '.join(info)})[/dim]"
 
         return tabla
 
@@ -236,8 +370,12 @@ class Display:
         tabla.add_column("Estado", justify="center")
         tabla.add_column("CPU%", justify="right", style="red")
 
-        pids = self._snapshot_val("threads", {})
-        for pid, datos in pids.items():
+        items = self._build_filtered_sorted_pids()
+        self._adjust_selected_idx(len(items))
+
+        for row_idx, (pid, datos) in enumerate(items):
+            selected = self._is_row_selected(pid, row_idx)
+            style = "bold reverse" if selected else None
             if not isinstance(datos, list):
                 continue
             for th in datos[:20]:
@@ -247,9 +385,19 @@ class Display:
                     th.get("nombre", ""),
                     th.get("estado", ""),
                     f"{th.get('cpu_pct', 0):.1f}%",
+                    style=style,
                 )
             if len(datos) > 20:
-                tabla.add_row("", "", "...", f"... y {len(datos)-20} más")
+                tabla.add_row("", "", "...", f"... y {len(datos)-20} más", style=style)
+
+        if self._filter_name or self._filter_user or self._sort_mode != "cpu":
+            info = []
+            if self._filter_name:
+                info.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                info.append(f"user={self._filter_user}")
+            info.append(f"orden={self._sort_mode}")
+            tabla.title = f"[bold green]Vista: Threads[/bold green]  [dim]({' | '.join(info)})[/dim]"
 
         return tabla
 
@@ -265,15 +413,29 @@ class Display:
         tabla.add_column("SigCgt", style="green")
         tabla.add_column("SigPnd", style="magenta")
 
-        pids = self._snapshot_val("senales", {})
-        for pid, datos in pids.items():
+        items = self._build_filtered_sorted_pids()
+        self._adjust_selected_idx(len(items))
+
+        for row_idx, (pid, datos) in enumerate(items):
+            selected = self._is_row_selected(pid, row_idx)
+            style = "bold reverse" if selected else None
             tabla.add_row(
                 str(pid),
                 ", ".join(datos.get("sigblk", [])[:8]) or "-",
                 ", ".join(datos.get("sigign", [])[:8]) or "-",
                 ", ".join(datos.get("sigcgt", [])[:8]) or "-",
                 ", ".join(datos.get("sigpnd", [])[:8]) or "-",
+                style=style,
             )
+
+        if self._filter_name or self._filter_user or self._sort_mode != "pid":
+            info = []
+            if self._filter_name:
+                info.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                info.append(f"user={self._filter_user}")
+            info.append(f"orden={self._sort_mode}")
+            tabla.title = f"[bold green]Vista: Señales[/bold green]  [dim]({' | '.join(info)})[/dim]"
 
         return tabla
 
@@ -292,12 +454,16 @@ class Display:
         tabla.add_column("Vol CtxSw", justify="right")
         tabla.add_column("Nonvol CtxSw", justify="right")
 
-        pids = self._snapshot_val("scheduling", {})
-        for pid, datos in pids.items():
+        items = self._build_filtered_sorted_pids()
+        self._adjust_selected_idx(len(items))
+
+        for row_idx, (pid, datos) in enumerate(items):
+            selected = self._is_row_selected(pid, row_idx)
+            style = "bold reverse" if selected else None
             tabla.add_row(
                 str(pid),
-                str(d.get("nice", "")) if (d := datos) and datos.get("nice") is not None else "",
-                str(d.get("priority", "")) if (d := datos) and datos.get("priority") is not None else "",
+                str(datos.get("nice", "")) if datos.get("nice") is not None else "",
+                str(datos.get("priority", "")) if datos.get("priority") is not None else "",
                 str(datos.get("policy", "")),
                 str(datos.get("rt_priority", "")) if datos.get("rt_priority") is not None else "",
                 str(datos.get("cpus_allowed_list", "")) or "-",
@@ -305,7 +471,17 @@ class Display:
                 if datos.get("voluntary_ctxt_switches") is not None else "",
                 str(datos.get("nonvoluntary_ctxt_switches", ""))
                 if datos.get("nonvoluntary_ctxt_switches") is not None else "",
+                style=style,
             )
+
+        if self._filter_name or self._filter_user or self._sort_mode != "pid":
+            info = []
+            if self._filter_name:
+                info.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                info.append(f"user={self._filter_user}")
+            info.append(f"orden={self._sort_mode}")
+            tabla.title = f"[bold green]Vista: Scheduling[/bold green]  [dim]({' | '.join(info)})[/dim]"
 
         return tabla
 
@@ -387,7 +563,7 @@ class Display:
         # Footer con instrucciones
         footer = Layout(
             Panel(
-                "[dim]1-7: Cambiar vista  |  q: Salir  |  +/-: Refresh  |  r: Forzar refresh[/dim]",
+                "[dim]1-7/r/m/f/t/s/p/g: Vista  |  ↑↓: Navegar  |  Enter: Pin  |  /: Filtrar  |  u: Usuario  |  c: Orden  |  +/-: Int  |  q: Salir  |  h/?: Ayuda[/dim]",
                 style="on dark_blue",
             ),
             size=3,
@@ -449,28 +625,114 @@ class Display:
 
     def _procesar_tecla(self, ch: str):
         """Procesa una tecla individual (extraído de _input_loop)."""
+        # Modo filtro: si estamos escribiendo un filtro, procesar carácter a carácter
+        if self._filter_mode is not None:
+            self._procesar_filtro_input(ch)
+            return
+
+        # Números 1-7
         if ch in self.TECLAS_VISTA:
             self.set_vista(VISTAS.index(self.TECLAS_VISTA[ch]))
+            self._reset_navegacion()
+        # Letras r/m/f/t/s/p/g
+        elif ch in self.TECLAS_VISTA_LETRAS:
+            self.set_vista(VISTAS.index(self.TECLAS_VISTA_LETRAS[ch]))
+            self._reset_navegacion()
         elif ch == "q":
             self.stop_event.set()
-        elif ch in ("\x1b",):  # Escape key sequences
+        elif ch in ("h", "?"):
+            self._mostrar_ayuda()
+        elif ch in ("\x1b",):  # Escape key sequences - flechas
             # Flechas: leer 2 chars más
             import select
             if select.select([sys.stdin], [], [], 0.05)[0]:
                 ch2 = sys.stdin.read(1)
                 if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
                     ch3 = sys.stdin.read(1)
-                    if ch3 == "C":  # Right arrow
+                    if ch3 == "A":  # Up arrow
+                        self._selected_idx = max(0, self._selected_idx - 1)
+                        self._pinned_pid = None  # Quitar pin al navegar
+                    elif ch3 == "B":  # Down arrow
+                        items = self._build_filtered_sorted_pids()
+                        self._selected_idx = min(len(items) - 1, self._selected_idx + 1)
+                        self._pinned_pid = None
+                    elif ch3 == "C":  # Right arrow
                         self.siguiente_vista()
+                        self._reset_navegacion()
                     elif ch3 == "D":  # Left arrow
                         self.anterior_vista()
+                        self._reset_navegacion()
+        elif ch == "\r" or ch == "\n":  # Enter - Pin proceso
+            items = self._build_filtered_sorted_pids()
+            if items and self._selected_idx < len(items):
+                pid, _ = items[self._selected_idx]
+                if self._pinned_pid == pid:
+                    self._pinned_pid = None  # Despinear
+                else:
+                    self._pinned_pid = pid
+        elif ch == "/":  # Filtrar por nombre
+            self._filter_mode = "name"
+            self._filter_buffer = ""
+        elif ch == "u":  # Filtrar por usuario
+            self._filter_mode = "user"
+            self._filter_buffer = ""
+        elif ch == "c":  # Toggle orden
+            idx = SORT_MODES.index(self._sort_mode)
+            self._sort_mode = SORT_MODES[(idx + 1) % len(SORT_MODES)]
         elif ch == "+":
-            self.refresh_rate = min(INTERVALO_MAX, self.refresh_rate + 0.1)
+            self._ajustar_intervalo_analizador(+0.5)
         elif ch == "-":
-            self.refresh_rate = max(INTERVALO_MIN, self.refresh_rate - 0.1)
-        # 'r' — no-op: Live ya refresca automáticamente
+            self._ajustar_intervalo_analizador(-0.5)
 
         self._last_key = ch
+
+    def _reset_navegacion(self):
+        """Resetea el estado de navegación al cambiar de vista."""
+        self._selected_idx = 0
+        self._pinned_pid = None
+
+    def _procesar_filtro_input(self, ch: str):
+        """Procesa entrada de texto para filtros (nombre/usuario)."""
+        if ch in ("\x1b",):  # Escape - cancelar filtro
+            self._filter_mode = None
+            self._filter_buffer = ""
+        elif ch in ("\r", "\n"):  # Enter - confirmar filtro
+            if self._filter_mode == "name":
+                self._filter_name = self._filter_buffer
+            elif self._filter_mode == "user":
+                self._filter_user = self._filter_buffer
+            self._filter_mode = None
+            self._filter_buffer = ""
+            self._reset_navegacion()
+        elif ch in ("\x7f", "\x08"):  # Backspace / Delete
+            self._filter_buffer = self._filter_buffer[:-1]
+        elif len(ch) == 1 and ch.isprintable():
+            self._filter_buffer += ch
+
+    def _ajustar_intervalo_analizador(self, delta: float):
+        """Ajusta el intervalo del analizador de la vista activa via Value compartido."""
+        vista = self.vista_actual
+        if vista in self._analizador_intervals:
+            intervalo_value = self._analizador_intervals[vista]
+            nuevo = max(INTERVALO_MIN, min(INTERVALO_MAX, intervalo_value.value + delta))
+            intervalo_value.value = nuevo
+            # También actualizar el refresh_rate del display para que coincida aproximadamente
+            self.refresh_rate = min(INTERVALO_MAX, max(INTERVALO_MIN, self.refresh_rate + delta))
+
+    def _mostrar_ayuda(self):
+        """Muestra pantalla de ayuda (stub - en una TUI real abriría un panel)."""
+        # Por ahora solo loggea; idealmente abriría un Panel modal con rich
+        print("\n=== AYUDA ===")
+        print("1-7 o r/m/f/t/s/p/g: Cambiar vista")
+        print("↑ ↓: Navegar lista")
+        print("Enter: Pin proceso")
+        print("/: Filtrar por nombre")
+        print("u: Filtrar por usuario")
+        print("c: Toggle orden CPU/RSS/PID")
+        print("+/-: Ajustar intervalo")
+        print("q: Salir")
+        print("h/?: Esta ayuda")
+        print("==============\n")
 
     def _procesar_signal_pipe(self):
         """Drena el self-pipe; el SignalHandler principal procesa las señales."""
@@ -516,10 +778,16 @@ class Display:
                         if ready:
                             # Señal recibida - procesar inmediatamente y forzar refresh
                             self._procesar_signal_pipe()
+                            if self._signal_handler:
+                                self._signal_handler.process_pending_signals()
                             continue  # refresh inmediato sin esperar refresh_rate
                     else:
                         # Sin signal pipe, usar sleep simple
                         time.sleep(self.refresh_rate)
+
+                    # Procesar señales pendientes también en cada iteración normal
+                    if self._signal_handler:
+                        self._signal_handler.process_pending_signals()
         except KeyboardInterrupt:
             self.stop_event.set()
         finally:

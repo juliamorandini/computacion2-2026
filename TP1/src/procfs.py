@@ -447,3 +447,14 @@ def leer_task(pid: int) -> list[int] | None:
         except ValueError:
             pass
     return tids
+
+
+def leer_task_status(pid: int, tid: int) -> dict | None:
+    """
+    Lee y parsea /proc/<pid>/task/<tid>/status (status de un thread específico).
+    Retorna dict con los campos parseados, o None si no se puede leer.
+    """
+    contenido = _leer_archivo(f"/proc/{pid}/task/{tid}/status")
+    if contenido is None:
+        return None
+    return _parsear_status(contenido)

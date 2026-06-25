@@ -195,12 +195,11 @@ class SignalHandler:
                 config = json.load(f)
 
             intervals = config.get("intervals", {})
+            min_intervals = config.get("min_intervals", {})
             for vista_nombre, analizador in self.analizadores.items():
                 config_key = self._vista_a_config_key.get(vista_nombre)
                 if config_key and config_key in intervals:
                     nuevo_intervalo = float(intervals[config_key])
-                    # Verificar mínimo
-                    min_intervals = config.get("min_intervals", {})
                     min_val = float(min_intervals.get(config_key, 0.1))
                     if nuevo_intervalo < min_val:
                         nuevo_intervalo = min_val
@@ -209,6 +208,8 @@ class SignalHandler:
                     analizador.intervalo.value = nuevo_intervalo
                     print(f"  {vista_nombre}: intervalo {old:.1f}s -> {nuevo_intervalo:.1f}s")
 
+        except FileNotFoundError:
+            print(f"[SignalHandler] SIGHUP: config.json no encontrado en {self.config_path}, usando defaults")
         except Exception as e:
             print(f"[SignalHandler] Error recargando config: {e}")
 

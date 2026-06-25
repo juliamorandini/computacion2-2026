@@ -215,7 +215,16 @@ def main():
 
     # Instanciar y arrancar la TUI (bloquea hasta que cierra)
     signal_pipe_fd = signal_handler.get_self_pipe_read_fd() if signal_handler else None
-    display = Display(snapshot, stop_event, refresh_rate=1.0, signal_pipe_fd=signal_pipe_fd)
+    # Construir dict vista -> Value("d") del analizador para ajustes en caliente
+    analizador_intervals = {nombre.lower(): inst.intervalo for nombre, inst in instancias}
+    display = Display(
+        snapshot,
+        stop_event,
+        refresh_rate=1.0,
+        signal_pipe_fd=signal_pipe_fd,
+        signal_handler=signal_handler,
+        analizador_intervals=analizador_intervals,
+    )
     try:
         display.run()
     except KeyboardInterrupt:

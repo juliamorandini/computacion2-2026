@@ -6,7 +6,7 @@ VmStk, VmExe, VmLib, VmHWM, VmSwap, page faults y segmentos agrupados
 """
 
 from analizadores.base import BaseAnalizador
-from procfs import leer_status, leer_maps
+from procfs import leer_status, leer_stat, leer_maps
 from multiprocessing.sharedctypes import Synchronized
 
 
@@ -38,21 +38,25 @@ class AnalizadorMemoria(BaseAnalizador):
 
     def analizar(self, pid: int) -> dict | None:
         status = leer_status(pid)
+        stat = leer_stat(pid)
         maps = leer_maps(pid)
 
         if not status:
             return None
 
-        # ----- Datos básicos de /proc/<pid>/status -----
+        # -- Datos básicos de /proc/<pid>/status
         datos = {}
         for campo in self.CAMPOS_STATUS:
             valor = status.get(campo)
-            # status ya parsea a int si es numérico
             datos[campo.lower()] = valor
 
-        # Page faults (de stat, pero status los trae como minflt/majflt)
-        datos["minflt"] = status.get("minflt")
-        datos["majflt"] = status.get("majflt")
+        # Page faults (correctos: de /proc/<pid>/stat, no status)
+        if stat:
+            datos["minflt"] = stat.get("minflt")
+            datos["majflt"] = stat.get("majflt")
+        else:
+            datos["minflt"] = None
+            datos["majflt"] = None
 
         # ----- Segmentos de memoria de /proc/<pid>/maps -----
         if maps:

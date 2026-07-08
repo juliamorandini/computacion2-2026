@@ -200,37 +200,38 @@ class Display:
 
         # Ordenar
         if self._sort_mode == "cpu":
-            items.sort(key=lambda x: x[1].get("cpu_pct", 0), reverse=True)
+            items.sort(key=lambda x: _get_cpu_for_sort(x[1]), reverse=True)
         elif self._sort_mode == "rss":
             # RSS puede estar en vmrss (memoria) o rss (resumen)
             def get_rss(d):
-                return d.get("vmrss") or d.get("rss") or 0
+                if isinstance(d, dict):
+                    return d.get("vmrss") or d.get("rss") or 0
+                # fds, threads: son listas, no hay RSS
+                return 0
             items.sort(key=lambda x: get_rss(x[1]), reverse=True)
         elif self._sort_mode == "pid":
             items.sort(key=lambda x: x[0])
 
         return items
 
-    def _is_row_selected(self, pid: int, row_idx: int) -> bool:
-        """Determina si una fila debe destacarse (seleccionada o pineada)."""
-        if self._pinned_pid is not None:
-            return pid == self._pinned_pid
-        return row_idx == self._selected_idx
 
-    def _adjust_selected_idx(self, max_idx: int):
-        """Ajusta _selected_idx para que esté dentro de rango válido."""
-        if max_idx <= 0:
-            self._selected_idx = 0
-        elif self._selected_idx >= max_idx:
-            self._selected_idx = max_idx - 1
-        elif self._selected_idx < 0:
-            self._selected_idx = 0
+# --------------------------------------------------------------------------- #
+#  Helpers de ordenamiento (module level)
+# --------------------------------------------------------------------------- #
 
-    # ------------------------------------------------------------------ #
-    #  Renderizado de vistas
-    # ------------------------------------------------------------------ #
+def _get_cpu_for_sort(dato) -> float:
+    """Obtiene CPU% para sort, funciona con dict o list."""
+    if isinstance(dato, dict):
+        return dato.get("cpu_pct", 0)
+    # vistas con lista (fds, threads): no hay cpu_pct por proceso
+    return 0
 
-    def _render_vista_resumen(self) -> Table:
+
+# --------------------------------------------------------------------------- #
+#  Clase principal
+# --------------------------------------------------------------------------- #
+
+class Display:
         tabla = Table(
             title="[bold green]Vista: Resumen[/bold green]",
             box=box.SIMPLE_HEAVY,

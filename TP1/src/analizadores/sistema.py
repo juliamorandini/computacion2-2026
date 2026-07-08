@@ -31,6 +31,23 @@ class AnalizadorSistema(BaseAnalizador):
 
         return self._recolectar_sistema()
 
+    def run(self):
+        """Override del ciclo del analizador: recolecta datos globales sin iterar por PID."""
+        import time as _tiempo_mod
+        while not self._detener.is_set():
+            ahora = _tiempo_mod.time()
+            self._delta_t = ahora - self._tiempo_anterior
+            self._tiempo_anterior = ahora
+
+            datos = self._recolectar_sistema()
+            if datos:
+                try:
+                    self.queue.put({"vista": self.nombre_vista, "data": datos})
+                except Exception:
+                    pass
+
+            self._detener.wait(timeout=self.intervalo.value)
+
     def _recolectar_sistema(self) -> dict:
         cpu_info = self._leer_cpu_global()
         mem_info = self._leer_meminfo()

@@ -61,6 +61,18 @@ SORT_MODES = ["cpu", "rss", "pid"]
 #  Clase principal
 # --------------------------------------------------------------------------- #
 
+
+# --------------------------------------------------------------------------- #
+#  Helpers de ordenamiento (module level)
+# --------------------------------------------------------------------------- #
+
+def _get_cpu_for_sort(dato) -> float:
+    """Obtiene CPU% para sort, funciona con dict o list."""
+    if isinstance(dato, dict):
+        return dato.get("cpu_pct", 0)
+    # vistas con lista (fds, threads): no hay cpu_pct por proceso
+    return 0
+
 class Display:
     """UI en terminal que muestra el snapshot en vivo.
 
@@ -215,23 +227,7 @@ class Display:
         return items
 
 
-# --------------------------------------------------------------------------- #
-#  Helpers de ordenamiento (module level)
-# --------------------------------------------------------------------------- #
-
-def _get_cpu_for_sort(dato) -> float:
-    """Obtiene CPU% para sort, funciona con dict o list."""
-    if isinstance(dato, dict):
-        return dato.get("cpu_pct", 0)
-    # vistas con lista (fds, threads): no hay cpu_pct por proceso
-    return 0
-
-
-# --------------------------------------------------------------------------- #
-#  Clase principal
-# --------------------------------------------------------------------------- #
-
-class Display:
+    def _render_vista_resumen(self) -> Table:
         tabla = Table(
             title="[bold green]Vista: Resumen[/bold green]",
             box=box.SIMPLE_HEAVY,

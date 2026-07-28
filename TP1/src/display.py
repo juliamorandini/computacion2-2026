@@ -10,6 +10,7 @@ Características:
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 import time
@@ -127,6 +128,7 @@ class Display:
         self._signal_pipe_fd = signal_pipe_fd
         self._signal_handler = signal_handler
         self._analizador_intervals = analizador_intervals or {}
+        self._refresh_requested = threading.Event()
 
         # --- Estado de navegación y filtrado ---
         self._selected_idx: int = 0          # Índice de fila seleccionada
@@ -226,6 +228,22 @@ class Display:
 
         return items
 
+    def _adjust_selected_idx(self, total_items: int) -> None:
+        """Mantiene el índice de fila seleccionado dentro del rango válido."""
+        if total_items <= 0:
+            self._selected_idx = 0
+            return
+
+        if self._selected_idx < 0:
+            self._selected_idx = 0
+        elif self._selected_idx >= total_items:
+            self._selected_idx = total_items - 1
+
+    def _is_row_selected(self, pid: int, row_idx: int) -> bool:
+        """Indica si una fila debe resaltarse según la selección actual."""
+        if self._pinned_pid is not None:
+            return self._pinned_pid == pid
+        return row_idx == self._selected_idx
 
     def _render_vista_resumen(self) -> Table:
         tabla = Table(
@@ -631,34 +649,45 @@ class Display:
         if ch in self.TECLAS_VISTA:
             self.set_vista(VISTAS.index(self.TECLAS_VISTA[ch]))
             self._reset_navegacion()
+            self._refresh_requested.set()
         # Letras r/m/f/t/s/p/g
         elif ch in self.TECLAS_VISTA_LETRAS:
             self.set_vista(VISTAS.index(self.TECLAS_VISTA_LETRAS[ch]))
             self._reset_navegacion()
+            self._refresh_requested.set()
         elif ch == "q":
             self.stop_event.set()
         elif ch in ("h", "?"):
             self._mostrar_ayuda()
+            self._refresh_requested.set()
         elif ch in ("\x1b",):  # Escape key sequences - flechas
-            # Flechas: leer 2 chars más
+            # Flechas: leer 2 chars más. Si no hay un terminal TTY disponible,
+            # simplemente ignorar el evento para no romper la ejecución.
             import select
-            if select.select([sys.stdin], [], [], 0.05)[0]:
-                ch2 = sys.stdin.read(1)
-                if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
-                    ch3 = sys.stdin.read(1)
-                    if ch3 == "A":  # Up arrow
-                        self._selected_idx = max(0, self._selected_idx - 1)
-                        self._pinned_pid = None  # Quitar pin al navegar
-                    elif ch3 == "B":  # Down arrow
-                        items = self._build_filtered_sorted_pids()
-                        self._selected_idx = min(len(items) - 1, self._selected_idx + 1)
-                        self._pinned_pid = None
-                    elif ch3 == "C":  # Right arrow
-                        self.siguiente_vista()
-                        self._reset_navegacion()
-                    elif ch3 == "D":  # Left arrow
-                        self.anterior_vista()
-                        self._reset_navegacion()
+            try:
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch2 = sys.stdin.read(1)
+                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                        ch3 = sys.stdin.read(1)
+                        if ch3 == "A":  # Up arrow
+                            self._selected_idx = max(0, self._selected_idx - 1)
+                            self._pinned_pid = None  # Quitar pin al navegar
+                            self._refresh_requested.set()
+                        elif ch3 == "B":  # Down arrow
+                            items = self._build_filtered_sorted_pids()
+                            self._selected_idx = min(len(items) - 1, self._selected_idx + 1)
+                            self._pinned_pid = None
+                            self._refresh_requested.set()
+                        elif ch3 == "C":  # Right arrow
+                            self.siguiente_vista()
+                            self._reset_navegacion()
+                            self._refresh_requested.set()
+                        elif ch3 == "D":  # Left arrow
+                            self.anterior_vista()
+                            self._reset_navegacion()
+                            self._refresh_requested.set()
+            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                pass
         elif ch == "\r" or ch == "\n":  # Enter - Pin proceso
             items = self._build_filtered_sorted_pids()
             if items and self._selected_idx < len(items):
@@ -667,19 +696,25 @@ class Display:
                     self._pinned_pid = None  # Despinear
                 else:
                     self._pinned_pid = pid
+                self._refresh_requested.set()
         elif ch == "/":  # Filtrar por nombre
             self._filter_mode = "name"
             self._filter_buffer = ""
+            self._refresh_requested.set()
         elif ch == "u":  # Filtrar por usuario
             self._filter_mode = "user"
             self._filter_buffer = ""
+            self._refresh_requested.set()
         elif ch == "c":  # Toggle orden
             idx = SORT_MODES.index(self._sort_mode)
             self._sort_mode = SORT_MODES[(idx + 1) % len(SORT_MODES)]
+            self._refresh_requested.set()
         elif ch == "+":
             self._ajustar_intervalo_analizador(+0.5)
+            self._refresh_requested.set()
         elif ch == "-":
             self._ajustar_intervalo_analizador(-0.5)
+            self._refresh_requested.set()
 
         self._last_key = ch
 
@@ -693,6 +728,7 @@ class Display:
         if ch in ("\x1b",):  # Escape - cancelar filtro
             self._filter_mode = None
             self._filter_buffer = ""
+            self._refresh_requested.set()
         elif ch in ("\r", "\n"):  # Enter - confirmar filtro
             if self._filter_mode == "name":
                 self._filter_name = self._filter_buffer
@@ -701,10 +737,13 @@ class Display:
             self._filter_mode = None
             self._filter_buffer = ""
             self._reset_navegacion()
+            self._refresh_requested.set()
         elif ch in ("\x7f", "\x08"):  # Backspace / Delete
             self._filter_buffer = self._filter_buffer[:-1]
+            self._refresh_requested.set()
         elif len(ch) == 1 and ch.isprintable():
             self._filter_buffer += ch
+            self._refresh_requested.set()
 
     def _ajustar_intervalo_analizador(self, delta: float):
         """Ajusta el intervalo del analizador de la vista activa via Value compartido."""
@@ -760,8 +799,19 @@ class Display:
                 refresh_per_second=4,
                 transient=True,
             ) as live:
+                next_refresh = time.monotonic() + self.refresh_rate
                 while not self.stop_event.is_set():
-                    live.update(self._build_layout())
+                    should_refresh = self._refresh_requested.is_set()
+                    if not should_refresh and time.monotonic() < next_refresh:
+                        should_refresh = False
+                    else:
+                        should_refresh = True
+
+                    if should_refresh:
+                        live.update(self._build_layout())
+                        self._refresh_requested.clear()
+                        next_refresh = time.monotonic() + self.refresh_rate
+
                     # Usar select en lugar de sleep para responder a señales/pipe
                     # Timeout = refresh_rate para mantener tasa de refresco
                     import select

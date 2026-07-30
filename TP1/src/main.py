@@ -247,7 +247,6 @@ def main():
     stop_event = Event()
 
     if _es_windows():
-        print("[Main] Windows detectado: arrancando modo seguro sin procesos multiproceso.")
         worker = threading.Thread(target=_run_windows_fallback, args=(snapshot, stop_event, 1.0), daemon=True)
         worker.start()
         agregador = None

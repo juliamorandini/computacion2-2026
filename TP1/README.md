@@ -106,7 +106,7 @@ Sigue estos pasos desde la raíz del proyecto.
    ```
 
 > Nota: si querés ver información de procesos de otros usuarios, podés correrlo con privilegios elevados, por ejemplo: `sudo python3 src/main.py`.
-
+python -m pytest -q tests/test_windows_fallback.py tests/test_display.py tests/test_display_interaction.py
 ### Opción B: Uso de Docker (recomendado)
 
 El entorno oficial de desarrollo y prueba utiliza Docker, compartiendo el espacio de nombres (`pid: host`).

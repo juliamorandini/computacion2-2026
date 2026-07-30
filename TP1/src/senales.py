@@ -130,15 +130,25 @@ class SignalHandler:
     def install(self):
         """Instala handlers para todas las señales soportadas."""
         # Guardar handlers originales para posible restauración
-        for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP,
-                    signal.SIGUSR1, signal.SIGUSR2):
-            self._original_handlers[sig] = signal.signal(sig, self._handler)
+        señales = [
+            sig for sig in (signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGHUP", None),
+                            getattr(signal, "SIGUSR1", None), getattr(signal, "SIGUSR2", None))
+            if sig is not None
+        ]
+        for sig in señales:
+            try:
+                self._original_handlers[sig] = signal.signal(sig, self._handler)
+            except (AttributeError, ValueError, OSError):
+                continue
 
         # SIGWINCH opcional (puede no estar disponible en todas las plataformas)
         if hasattr(signal, "SIGWINCH"):
-            self._original_handlers[signal.SIGWINCH] = signal.signal(
-                signal.SIGWINCH, self._handler
-            )
+            try:
+                self._original_handlers[signal.SIGWINCH] = signal.signal(
+                    signal.SIGWINCH, self._handler
+                )
+            except (AttributeError, ValueError, OSError):
+                pass
 
         # Registrar self-pipe con signal.set_wakeup_fd (Python 3.5+)
         # Esto hace que Python despierte de select() automaticamente al recibir señal

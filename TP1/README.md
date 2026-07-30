@@ -60,18 +60,54 @@ El sistema se basa en un modelo productor-consumidor y se orquesta a través de 
 
 ## 6. Cómo correr y testear
 
-Existen dos formas principales de ejecutar el proyecto: de manera local o mediante Docker.
+Hay dos formas principales de ejecutar el proyecto: de manera local o con Docker.
 
-### Opción A: Ejecución Local
+### Opción A: Ejecución local paso a paso
 
-Si estás en Linux, podés instalar las dependencias y ejecutar el script.
-1. `python3 -m venv .venv` y `source .venv/bin/activate`
-2. `pip install -r requirements.txt`
-3. `cd src && python main.py`
+Sigue estos pasos desde la raíz del proyecto.
 
-*(Nota: para procesos de otros usuarios, usá `sudo python main.py`).*
+1. **Entrá a la carpeta del trabajo**:
+   ```bash
+   cd TP1
+   ```
 
-### Opción B: Uso de Docker (Recomendado)
+2. **Creá un entorno virtual**:
+   - En Linux/WSL:
+     ```bash
+     python3 -m venv .venv
+     ```
+   - En PowerShell:
+     ```powershell
+     python -m venv .venv
+     ```
+
+3. **Activá el entorno virtual**:
+   - En Linux/WSL:
+     ```bash
+     source .venv/bin/activate
+     ```
+   - En PowerShell:
+     ```powershell
+     .\.venv\Scripts\Activate.ps1
+     ```
+
+4. **Instalá las dependencias**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+5. **Ejecutá el monitor**:
+   ```bash
+   python src/main.py
+   ```
+   o, si tu sistema usa `python3`:
+   ```bash
+   python3 src/main.py
+   ```
+
+> Nota: si querés ver información de procesos de otros usuarios, podés correrlo con privilegios elevados, por ejemplo: `sudo python3 src/main.py`.
+
+### Opción B: Uso de Docker (recomendado)
 
 El entorno oficial de desarrollo y prueba utiliza Docker, compartiendo el espacio de nombres (`pid: host`).
 
@@ -84,8 +120,9 @@ El entorno oficial de desarrollo y prueba utiliza Docker, compartiendo el espaci
    docker compose run --rm monitor
    ```
 
-### Probando las Señales
-Desde otra terminal, podés testear enviándole señales al proceso principal del monitor (`kill -SIGNAL <pid>`):
-- `kill -SIGUSR1 <pid>`: Genera un archivo local con el volcado (dump) JSON del sistema en vivo.
-- `kill -SIGUSR2 <pid>`: Activa o desactiva el modo verbose.
-- `kill -SIGHUP <pid>`: Recarga los valores dinámicos desde el archivo de configuración.
+### Probando las señales
+
+Desde otra terminal, podés probar el manejo de señales enviándoselas al proceso principal del monitor (`kill -SIGNAL <pid>`):
+- `kill -SIGUSR1 <pid>`: genera un archivo local con el volcado (dump) JSON del sistema en vivo.
+- `kill -SIGUSR2 <pid>`: activa o desactiva el modo verbose.
+- `kill -SIGHUP <pid>`: recarga los valores dinámicos desde el archivo de configuración.

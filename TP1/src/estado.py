@@ -5,6 +5,8 @@ componentes del monitor.  Usa `multiprocessing.Manager` para obtener un
 diccionario que sobrevive al fork y es visible desde cualquier proceso.
 """
 
+import os
+import threading
 from multiprocessing import Manager, Lock, Value
 
 
@@ -36,6 +38,20 @@ def crear_estado():
         - ``verbose_flag`` (Value): multiprocessing.Value("b") booleano
           compartido para modo verbose global.
     """
+    if os.name == "nt":
+        snapshot = {}
+        lock = threading.Lock()
+        verbose_flag = Value("b", False)
+        snapshot["resumen"] = {}
+        snapshot["memoria"] = {}
+        snapshot["fds"] = {}
+        snapshot["threads"] = {}
+        snapshot["senales"] = {}
+        snapshot["scheduling"] = {}
+        snapshot["sistema"] = {}
+        snapshot["timestamps"] = {}
+        return snapshot, lock, verbose_flag
+
     manager = Manager()
 
     snapshot = manager.dict()

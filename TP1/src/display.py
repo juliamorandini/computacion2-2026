@@ -138,6 +138,7 @@ class Display:
         self._sort_mode: str = "cpu"         # "cpu" | "rss" | "pid"
         self._filter_mode: str | None = None # "name" | "user" | None (input mode)
         self._filter_buffer: str = ""        # Buffer mientras se escribe filtro
+        self._show_help: bool = False        # Muestra una ayuda visible en pantalla
 
     # ------------------------------------------------------------------ #
     #  Propiedades / utilidades
@@ -244,6 +245,12 @@ class Display:
         if self._pinned_pid is not None:
             return self._pinned_pid == pid
         return row_idx == self._selected_idx
+
+    def _get_pin_info(self) -> str:
+        """Retorna una descripción legible del estado de pin."""
+        if self._pinned_pid is None:
+            return "Sin pin"
+        return f"Pin: PID {self._pinned_pid}"
 
     def _render_vista_resumen(self) -> Table:
         tabla = Table(
@@ -564,30 +571,62 @@ class Display:
         datos_actual = self._snapshot_val(self.vista_actual, {})
         con_datos = len(datos_actual) if isinstance(datos_actual, dict) else 0
 
+        filtro_info = ""
+        if self._filter_mode == "name":
+            filtro_info = f"Filtro nombre: {self._filter_buffer or '...'}"
+        elif self._filter_mode == "user":
+            filtro_info = f"Filtro usuario: {self._filter_buffer or '...'}"
+        elif self._filter_name or self._filter_user:
+            filtros = []
+            if self._filter_name:
+                filtros.append(f"nombre={self._filter_name}")
+            if self._filter_user:
+                filtros.append(f"usuario={self._filter_user}")
+            filtro_info = "Filtros: " + " | ".join(filtros)
+
         header_text = (
             f"[bold blue]Monitor de Procesos y Threads[/bold blue]  [dim]|  "
             f"PIDs: {pids_activos}[/dim]  |  "
             f"Vista: [bold yellow]{vista_nombre}[/bold yellow]  [dim]({con_datos} con datos)[/dim]  |  "
             f"Refresh: {self.refresh_rate:.1f}s"
         )
+        if filtro_info:
+            header_text += f"  |  [bold cyan]{filtro_info}[/bold cyan]"
+        header_text += f"  |  [bold magenta]{self._get_pin_info()}[/bold magenta]"
         header = Layout(Panel(header_text, style="on dark_blue"), size=3)
 
         # Body (vista actual)
         body = self._render_body()
 
         # Footer con instrucciones
+        footer_text = "[dim]1-7/r/m/f/t/s/p/g: Vista  |  ↑↓: Navegar  |  Enter: Pin/Despin  |  /: Filtrar nombre  |  u: Filtrar usuario  |  c: Orden  |  +/-: Int  |  q: Salir  |  h/?: Ayuda[/dim]"
+        if self._filter_mode == "name":
+            footer_text = "[bold cyan]Escribí el texto del filtro y presioná Enter para aplicarlo. Esc para cancelar.[/bold cyan]"
+        elif self._filter_mode == "user":
+            footer_text = "[bold cyan]Escribí el nombre de usuario y presioná Enter para aplicarlo. Esc para cancelar.[/bold cyan]"
         footer = Layout(
-            Panel(
-                "[dim]1-7/r/m/f/t/s/p/g: Vista  |  ↑↓: Navegar  |  Enter: Pin  |  /: Filtrar  |  u: Usuario  |  c: Orden  |  +/-: Int  |  q: Salir  |  h/?: Ayuda[/dim]",
-                style="on dark_blue",
-            ),
+            Panel(footer_text, style="on dark_blue"),
             size=3,
         )
 
         layout.split_column(header, body, footer)
         return layout
 
-    def _render_body(self) -> Layout:
+    def _render_body(self):
+        if self._show_help:
+            help_text = Text()
+            help_text.append("Ayuda rápida\n", style="bold cyan")
+            help_text.append("1-7 o r/m/f/t/s/p/g: cambiar vista\n")
+            help_text.append("↑ ↓: navegar la lista\n")
+            help_text.append("Enter: pin / despin de un proceso\n")
+            help_text.append("/: filtrar por nombre\n")
+            help_text.append("u: filtrar por usuario\n")
+            help_text.append("c: cambiar orden CPU/RSS/PID\n")
+            help_text.append("+/ -: ajustar intervalo del analizador activo\n")
+            help_text.append("q: salir\n")
+            help_text.append("h / ?: mostrar u ocultar esta ayuda")
+            return Panel(help_text, title="[bold yellow]Ayuda[/bold yellow]", border_style="yellow")
+
         vista = self.vista_actual
         if vista == "resumen":
             return self._render_vista_resumen()
@@ -611,9 +650,72 @@ class Display:
 
     def _input_loop(self):
         """Lee teclas de stdin y señales del self-pipe en un thread separado."""
-        import select
-        import termios
-        import tty
+        if os.name == "nt":
+            try:
+                import msvcrt
+            except ImportError:  # pragma: no cover - entorno sin msvcrt
+                msvcrt = None
+
+            if msvcrt is not None:
+                while not self.stop_event.is_set():
+                    try:
+                        if msvcrt.kbhit():
+                            ch = msvcrt.getwch()
+                            if ch in ("\x00", "\xe0", "\224"):
+                                ch2 = msvcrt.getwch()
+                                self._procesar_tecla(self._normalizar_tecla(ch, ch2))
+                            else:
+                                self._procesar_tecla(self._normalizar_tecla(ch))
+                    except (OSError, ValueError, KeyboardInterrupt):
+                        pass
+                    time.sleep(0.05)
+                return
+
+        try:
+            import select
+            import termios
+            import tty
+        except ImportError:
+            while not self.stop_event.is_set():
+                time.sleep(0.1)
+            return
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        self._procesar_signal_pipe()
+        finally:
+            try:
+                termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
 
         old_settings = termios.tcgetattr(sys.stdin)
         stdin_fd = sys.stdin.fileno()
@@ -631,15 +733,257 @@ class Display:
                 for fd in ready:
                     if fd == stdin_fd:
                         ch = sys.stdin.read(1)
-                        self._procesar_tecla(ch)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
                     elif fd == self._signal_pipe_fd:
                         # Señal recibida - procesar y forzar refresh
                         self._procesar_signal_pipe()
         finally:
             termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
 
-    def _procesar_tecla(self, ch: str):
+        old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+
+        # FDs a vigilar: stdin + signal pipe (si existe)
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                # select con timeout para no bloquear indefinidamente
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        # Señal recibida - procesar y forzar refresh
+                        self._procesar_signal_pipe()
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+
+        # FDs a vigilar: stdin + signal pipe (si existe)
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                # select con timeout para no bloquear indefinidamente
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        # Señal recibida - procesar y forzar refresh
+                        self._procesar_signal_pipe()
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+
+        # FDs a vigilar: stdin + signal pipe (si existe)
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                # select con timeout para no bloquear indefinidamente
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        # Señal recibida - procesar y forzar refresh
+                        self._procesar_signal_pipe()
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+
+        # FDs a vigilar: stdin + signal pipe (si existe)
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                # select con timeout para no bloquear indefinidamente
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        # Señal recibida - procesar y forzar refresh
+                        self._procesar_signal_pipe()
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_string)
+            while not self.stop_event.is_set():
+                try:
+                    if msvcrt.kbhit():
+                        ch = msvcrt.getwch()
+                        if ch in ("\x00", "\xe0", "\224"):
+                            ch2 = msvcrt.getwch()
+                            self._procesar_tecla(self._normalizar_tecla(ch, ch2))
+                        else:
+                            self._procesar_tecla(self._normalizar_tecla(ch))
+                except (OSError, ValueError, KeyboardInterrupt):
+                    # En algunas consolas de Windows el hilo de entrada puede fallar
+                    # temporalmente; no lo rompemos para que el TUI siga vivo.
+                    pass
+                time.sleep(0.05)
+            return
+
+        old_settings = termios.tcgetattr(sys.stdin)
+        stdin_fd = sys.stdin.fileno()
+
+        # FDs a vigilar: stdin + signal pipe (si existe)
+        read_fds = [stdin_fd]
+        if self._signal_pipe_fd is not None:
+            read_fds.append(self._signal_pipe_fd)
+
+        try:
+            tty.setcbreak(stdin_fd)
+            while not self.stop_event.is_set():
+                # select con timeout para no bloquear indefinidamente
+                ready, _, _ = select.select(read_fds, [], [], 0.1)
+                for fd in ready:
+                    if fd == stdin_fd:
+                        ch = sys.stdin.read(1)
+                        if ch == "\x1b":
+                            try:
+                                if select.select([sys.stdin], [], [], 0.05)[0]:
+                                    ch2 = sys.stdin.read(1)
+                                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
+                                        ch3 = sys.stdin.read(1)
+                                        self._procesar_tecla(self._normalizar_secuencia_escape(ch2, ch3))
+                                    else:
+                                        self._procesar_tecla("escape")
+                                else:
+                                    self._procesar_tecla("escape")
+                            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
+                                self._procesar_tecla("escape")
+                        else:
+                            self._procesar_tecla(ch)
+                    elif fd == self._signal_pipe_fd:
+                        # Señal recibida - procesar y forzar refresh
+                        self._procesar_signal_pipe()
+        finally:
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
+
+    def _normalizar_tecla(self, ch: str | None, ch2: str | None = None) -> str | None:
+        """Normaliza teclas especiales entre Unix y Windows."""
+        if ch is None:
+            return None
+        if ch in ("\x00", "\xe0", "\224"):
+            if ch2 in ("H", "P", "M", "K"):
+                return {"H": "up", "P": "down", "M": "right", "K": "left"}[ch2]
+            return None
+        if ch in ("\r", "\n"):
+            return "enter"
+        if ch in ("\x7f", "\x08"):
+            return "backspace"
+        if ch == "\x1b":
+            return "escape"
+        return ch
+
+    def _normalizar_secuencia_escape(self, ch2: str | None, ch3: str | None = None) -> str | None:
+        """Convierte una secuencia de escape tipo ANSI en una acción de teclado."""
+        if ch2 in ("[", "O") and ch3 in ("A", "B", "C", "D"):
+            return {"A": "up", "B": "down", "C": "right", "D": "left"}[ch3]
+        return "escape"
+
+    def _procesar_tecla(self, ch: str | None):
         """Procesa una tecla individual (extraído de _input_loop)."""
+        if ch is None:
+            return
+
+        if isinstance(ch, str) and len(ch) == 1 and ch.isalpha():
+            ch = ch.lower()
+
         # Modo filtro: si estamos escribiendo un filtro, procesar carácter a carácter
         if self._filter_mode is not None:
             self._procesar_filtro_input(ch)
@@ -658,58 +1002,53 @@ class Display:
         elif ch == "q":
             self.stop_event.set()
         elif ch in ("h", "?"):
-            self._mostrar_ayuda()
+            self._show_help = not self._show_help
             self._refresh_requested.set()
-        elif ch in ("\x1b",):  # Escape key sequences - flechas
-            # Flechas: leer 2 chars más. Si no hay un terminal TTY disponible,
-            # simplemente ignorar el evento para no romper la ejecución.
-            import select
-            try:
-                if select.select([sys.stdin], [], [], 0.05)[0]:
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == "[" and select.select([sys.stdin], [], [], 0.05)[0]:
-                        ch3 = sys.stdin.read(1)
-                        if ch3 == "A":  # Up arrow
-                            self._selected_idx = max(0, self._selected_idx - 1)
-                            self._pinned_pid = None  # Quitar pin al navegar
-                            self._refresh_requested.set()
-                        elif ch3 == "B":  # Down arrow
-                            items = self._build_filtered_sorted_pids()
-                            self._selected_idx = min(len(items) - 1, self._selected_idx + 1)
-                            self._pinned_pid = None
-                            self._refresh_requested.set()
-                        elif ch3 == "C":  # Right arrow
-                            self.siguiente_vista()
-                            self._reset_navegacion()
-                            self._refresh_requested.set()
-                        elif ch3 == "D":  # Left arrow
-                            self.anterior_vista()
-                            self._reset_navegacion()
-                            self._refresh_requested.set()
-            except (AttributeError, OSError, ValueError, io.UnsupportedOperation):
-                pass
-        elif ch == "\r" or ch == "\n":  # Enter - Pin proceso
+        elif ch in ("up", "down", "right", "left"):
+            if ch == "up":
+                self._selected_idx = max(0, self._selected_idx - 1)
+                self._pinned_pid = None
+            elif ch == "down":
+                items = self._build_filtered_sorted_pids()
+                self._selected_idx = min(len(items) - 1, self._selected_idx + 1)
+                self._pinned_pid = None
+            elif ch == "right":
+                self.siguiente_vista()
+                self._reset_navegacion()
+            elif ch == "left":
+                self.anterior_vista()
+                self._reset_navegacion()
+            self._refresh_requested.set()
+        elif ch == "escape":
+            if self._show_help:
+                self._show_help = False
+                self._refresh_requested.set()
+        elif ch in ("enter", "\r", "\n"):
             items = self._build_filtered_sorted_pids()
             if items and self._selected_idx < len(items):
                 pid, _ = items[self._selected_idx]
                 if self._pinned_pid == pid:
-                    self._pinned_pid = None  # Despinear
+                    self._pinned_pid = None
+                    self._refresh_requested.set()
                 else:
                     self._pinned_pid = pid
+                    self._refresh_requested.set()
+            else:
+                self._pinned_pid = None
                 self._refresh_requested.set()
-        elif ch == "/":  # Filtrar por nombre
+        elif ch == "/":
             self._filter_mode = "name"
             self._filter_buffer = ""
             self._refresh_requested.set()
-        elif ch == "u":  # Filtrar por usuario
+        elif ch == "u":
             self._filter_mode = "user"
             self._filter_buffer = ""
             self._refresh_requested.set()
-        elif ch == "c":  # Toggle orden
+        elif ch == "c":
             idx = SORT_MODES.index(self._sort_mode)
             self._sort_mode = SORT_MODES[(idx + 1) % len(SORT_MODES)]
             self._refresh_requested.set()
-        elif ch == "+":
+        elif ch in ("+", "="):
             self._ajustar_intervalo_analizador(+0.5)
             self._refresh_requested.set()
         elif ch == "-":
@@ -725,11 +1064,11 @@ class Display:
 
     def _procesar_filtro_input(self, ch: str):
         """Procesa entrada de texto para filtros (nombre/usuario)."""
-        if ch in ("\x1b",):  # Escape - cancelar filtro
+        if ch == "escape":  # Escape - cancelar filtro
             self._filter_mode = None
             self._filter_buffer = ""
             self._refresh_requested.set()
-        elif ch in ("\r", "\n"):  # Enter - confirmar filtro
+        elif ch in ("enter", "\r", "\n"):  # Enter - confirmar filtro
             if self._filter_mode == "name":
                 self._filter_name = self._filter_buffer
             elif self._filter_mode == "user":
@@ -738,7 +1077,7 @@ class Display:
             self._filter_buffer = ""
             self._reset_navegacion()
             self._refresh_requested.set()
-        elif ch in ("\x7f", "\x08"):  # Backspace / Delete
+        elif ch in ("backspace", "\x7f", "\x08"):  # Backspace / Delete
             self._filter_buffer = self._filter_buffer[:-1]
             self._refresh_requested.set()
         elif len(ch) == 1 and ch.isprintable():
@@ -746,14 +1085,18 @@ class Display:
             self._refresh_requested.set()
 
     def _ajustar_intervalo_analizador(self, delta: float):
-        """Ajusta el intervalo del analizador de la vista activa via Value compartido."""
+        """Ajusta el intervalo del analizador activo y el refresh del display."""
         vista = self.vista_actual
         if vista in self._analizador_intervals:
             intervalo_value = self._analizador_intervals[vista]
-            nuevo = max(INTERVALO_MIN, min(INTERVALO_MAX, intervalo_value.value + delta))
-            intervalo_value.value = nuevo
-            # También actualizar el refresh_rate del display para que coincida aproximadamente
-            self.refresh_rate = min(INTERVALO_MAX, max(INTERVALO_MIN, self.refresh_rate + delta))
+            try:
+                nuevo = max(INTERVALO_MIN, min(INTERVALO_MAX, intervalo_value.value + delta))
+                intervalo_value.value = nuevo
+            except Exception:
+                pass
+
+        # Siempre actualizar el refresh del display, incluso en modo seguro/Windows
+        self.refresh_rate = min(INTERVALO_MAX, max(INTERVALO_MIN, self.refresh_rate + delta))
 
     def _mostrar_ayuda(self):
         """Muestra pantalla de ayuda (stub - en una TUI real abriría un panel)."""

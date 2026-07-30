@@ -11,7 +11,11 @@ Diseño:
 """
 
 import os
-import pwd
+
+try:
+    import pwd
+except ModuleNotFoundError:  # Windows / PowerShell
+    pwd = None
 
 # ---------------------------------------------------------------------------
 # Constantes
@@ -96,11 +100,15 @@ def _leer_entero(path: str) -> int | None:
 def uid_a_usuario(uid: int) -> str:
     """
     Convierte un UID a nombre de usuario, con cache en memoria.
+    En Windows no existe el módulo pwd, así que devolvemos el UID como fallback.
     """
     if uid not in _UID_CACHE:
         try:
-            _UID_CACHE[uid] = pwd.getpwuid(uid).pw_name
-        except KeyError:
+            if pwd is not None:
+                _UID_CACHE[uid] = pwd.getpwuid(uid).pw_name
+            else:
+                _UID_CACHE[uid] = str(uid)
+        except (AttributeError, KeyError, TypeError):
             _UID_CACHE[uid] = str(uid)
     return _UID_CACHE[uid]
 

@@ -159,17 +159,15 @@ class AnalizadorSistema(BaseAnalizador):
             return None
 
     def _contar_procesos(self) -> dict:
-        """Cuenta procesos y threads totales usando snapshot['pids']."""
+        """Cuenta procesos y threads totales usando snapshot['resumen']."""
         pids = self.snapshot.get("pids", [])
+        resumen = self.snapshot.get("resumen", {})
         total_threads = 0
         for pid in pids:
-            try:
-                with open(f"/proc/{pid}/stat", "r") as f:
-                    partes = f.read().split()
-                    if len(partes) > 19:
-                        total_threads += int(partes[19])
-            except Exception:
-                pass
+            datos_pid = resumen.get(pid, {})
+            threads_pid = datos_pid.get("threads", 0)
+            if threads_pid:
+                total_threads += threads_pid
         return {"procesos": len(pids), "threads_totales": total_threads}
 
     def _top_procesos(self) -> tuple[list, list]:

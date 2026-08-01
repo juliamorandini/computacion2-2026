@@ -104,8 +104,6 @@ class AnalizadorResumen(BaseAnalizador):
                 except (ValueError, AttributeError):
                     clk_tck = 100
                 cpu_pct = 100.0 * delta_jiffies / (clk_tck * delta_t_real)
-                # Cap a 100% por core (aprox), para evitar valores imposibles
-                cpu_pct = min(cpu_pct, 100.0)
             else:
                 cpu_pct = 0.0
         else:

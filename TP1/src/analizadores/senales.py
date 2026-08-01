@@ -28,10 +28,11 @@ class AnalizadorSenales(BaseAnalizador):
         if not status:
             return None
 
+        default_sig = {"hex": "0000000000000000", "nombres": []}
         return {
-            "sigblk": status.get("SigBlk", []),
-            "sigign": status.get("SigIgn", []),
-            "sigcgt": status.get("SigCgt", []),
-            "sigpnd": status.get("SigPnd", []),
-            "shdpnd": status.get("ShdPnd", []),
+            "sigblk": status.get("SigBlk", default_sig),
+            "sigign": status.get("SigIgn", default_sig),
+            "sigcgt": status.get("SigCgt", default_sig),
+            "sigpnd": status.get("SigPnd", default_sig),
+            "shdpnd": status.get("ShdPnd", default_sig),
         }

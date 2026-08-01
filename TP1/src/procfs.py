@@ -197,9 +197,9 @@ def _parsear_stat(contenido: str) -> dict:
         "vsize": int(resto[20]) if len(resto) > 20 else None,
         "rss": int(resto[21]) if len(resto) > 21 else None,
         "rsslim": int(resto[22]) if len(resto) > 22 else None,
-        # Campos de scheduling (índices 39 y 40 en resto = campos 40 y 41 en stat)
-        "rt_priority": int(resto[39]) if len(resto) > 39 else None,
-        "policy": int(resto[40]) if len(resto) > 40 else None,
+        # Campos de scheduling (índices 37 y 38 en resto = campos 40 y 41 en stat)
+        "rt_priority": int(resto[37]) if len(resto) > 37 else None,
+        "policy": int(resto[38]) if len(resto) > 38 else None,
     }
 
 
@@ -238,9 +238,9 @@ def _parsear_status(contenido: str) -> dict:
 
         # Campos hex de señales
         if key in ("SigPnd", "ShdPnd", "SigBlk", "SigIgn", "SigCgt"):
-            resultado[key] = _parsear_signal_hex(value)
+            resultado[key] = {"hex": value, "nombres": _parsear_signal_hex(value)}
         # Campos numéricos simples
-        elif value.isdigit():
+        elif value.lstrip("-").isdigit():
             resultado[key] = int(value)
         # Campos con unidades (ej: "123456 kB")
         elif value.endswith(" kB"):

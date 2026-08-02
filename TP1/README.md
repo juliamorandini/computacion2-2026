@@ -84,6 +84,8 @@ El programa requiere Linux para su ejecución plena debido al acoplamiento profu
 docker compose build
 docker compose run --rm monitor
 ```
+![alt text](image.png)
+![alt text](image-1.png)
 > NOTA: Para salir limpio de la TUI, presione `q` (Quit) o envíe `Ctrl+C`.
 
 **Señales de monitorización:**

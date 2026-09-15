@@ -1,0 +1,62 @@
+
+; <<>> DiG 9.18.39-0ubuntu0.24.04.7-Ubuntu <<>> www.um.edu.ar
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 55709
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 3, ADDITIONAL: 5
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;www.um.edu.ar.			IN	A
+
+;; ANSWER SECTION:
+www.um.edu.ar.		600	IN	A	200.51.41.139
+
+;; AUTHORITY SECTION:
+um.edu.ar.		509	IN	NS	ns1.he.net.
+um.edu.ar.		509	IN	NS	ns3.um.edu.ar.
+um.edu.ar.		509	IN	NS	ns4.um.edu.ar.
+
+;; ADDITIONAL SECTION:
+ns1.he.net.		83199	IN	A	216.218.130.2
+ns1.he.net.		83199	IN	AAAA	2001:470:100::2
+ns3.um.edu.ar.		3410	IN	A	200.51.41.130
+ns4.um.edu.ar.		3410	IN	A	200.51.41.131
+
+;; Query time: 47 msec
+;; SERVER: 10.255.255.254#53(10.255.255.254) (UDP)
+;; WHEN: Tue Sep 15 16:07:06 UTC 2026
+;; MSG SIZE  rcvd: 194
+
+
+; <<>> DiG 9.18.39-0ubuntu0.24.04.7-Ubuntu <<>> www.um.edu.ar
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 17457
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 3, ADDITIONAL: 5
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;www.um.edu.ar.			IN	A
+
+;; ANSWER SECTION:
+www.um.edu.ar.		600	IN	A	200.51.41.139
+
+;; AUTHORITY SECTION:
+um.edu.ar.		509	IN	NS	ns4.um.edu.ar.
+um.edu.ar.		509	IN	NS	ns1.he.net.
+um.edu.ar.		509	IN	NS	ns3.um.edu.ar.
+
+;; ADDITIONAL SECTION:
+ns1.he.net.		83199	IN	A	216.218.130.2
+ns1.he.net.		83199	IN	AAAA	2001:470:100::2
+ns3.um.edu.ar.		3410	IN	A	200.51.41.130
+ns4.um.edu.ar.		3410	IN	A	200.51.41.131
+
+;; Query time: 3 msec
+;; SERVER: 10.255.255.254#53(10.255.255.254) (UDP)
+;; WHEN: Tue Sep 15 16:07:06 UTC 2026
+;; MSG SIZE  rcvd: 194
+

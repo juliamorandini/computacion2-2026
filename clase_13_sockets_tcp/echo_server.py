@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """Servidor de eco: devuelve todo lo que recibe."""
 import socket
-import time
 
 HOST, PUERTO = '0.0.0.0', 8080
 
 def atender(conn, direccion):
-    import time
-    time.sleep(10)
     print(f'Conexión desde {direccion}')
     try:
         while True:

@@ -47,7 +47,7 @@ def atender(conn):
 def main():
     # Alternativa más simple: signal.signal(SIGCHLD, SIG_IGN) delega la
     # cosecha al kernel. Acá usamos el handler explícito para verlo.
-    signal.signal(signal.SIGCHLD, cosechar)
+    signal.signal(signal.SIGCHLD, signal.SIG_IGN)
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as servidor:
         servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

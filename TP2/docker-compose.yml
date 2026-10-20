@@ -1,0 +1,18 @@
+services:
+  api:
+    build: .
+    container_name: tp2_api
+    ports:
+      - "8000:8000"
+    environment:
+      - WORKERS=4
+      - COLA_MAX=100
+      - TIMEOUT_DEFAULT=30
+      - LIMITE_APAGADO=10
+      - DIR_ESTADO=/app/estado
+    volumes:
+      - estado_data:/app/estado
+    stop_grace_period: 15s
+
+volumes:
+  estado_data:

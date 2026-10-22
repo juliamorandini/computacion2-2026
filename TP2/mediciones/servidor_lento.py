@@ -1,6 +1,7 @@
 """servidor_lento.py - Servidor HTTP de prueba con latencia configurable.
 
-Responde a GET /demora?s=X esperando X segundos antes de contestar.
+Servidor asyncio puro (sin dependencias externas) que responde a
+GET /demora?s=X esperando X segundos antes de contestar.
 Pensado para las mediciones M1 (descargas concurrentes vs secuenciales)
 sin depender de internet.
 
@@ -8,51 +9,122 @@ Se levanta como servicio aparte en docker-compose y la API lo alcanza
 por el nombre del servicio ('servidor_lento:9000').
 
 Uso:
-    python servidor_lento.py          # escucha en 0.0.0.0:9000
+    python servidor_lento.py
     curl http://localhost:9000/demora?s=1
+    curl "http://localhost:9000/demora?s=0.5&bytes=4096"
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import logging
-from aiohttp import web
+import os
+from urllib.parse import urlparse, parse_qs
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
 logger = logging.getLogger(__name__)
 
 
-async def handle_demora(request: web.Request) -> web.Response:
+async def _manejar_conexion(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    """Maneja una conexión HTTP entrante.
+
+    Parseo HTTP mínimo: solo lee la primera línea del request (método +
+    path) y los headers hasta la línea vacía.  Suficiente para GET.
+    """
+    try:
+        # Leer la línea del request
+        linea_request = await asyncio.wait_for(reader.readline(), timeout=10)
+        if not linea_request:
+            return
+
+        # Leer y descartar los headers
+        while True:
+            linea = await asyncio.wait_for(reader.readline(), timeout=10)
+            if linea == b'\r\n' or linea == b'\n' or not linea:
+                break
+
+        # Parsear método y path
+        partes = linea_request.decode('utf-8', errors='replace').strip().split(' ')
+        if len(partes) < 2:
+            _enviar_respuesta(writer, 400, 'Request inválido')
+            return
+
+        metodo, ruta_completa = partes[0], partes[1]
+        parsed = urlparse(ruta_completa)
+        ruta = parsed.path
+        query = parse_qs(parsed.query)
+
+        if metodo != 'GET':
+            _enviar_respuesta(writer, 405, 'Solo GET')
+            return
+
+        if ruta == '/demora':
+            await _handle_demora(writer, query)
+        elif ruta == '/health':
+            _enviar_respuesta(writer, 200, 'ok')
+        else:
+            _enviar_respuesta(writer, 404, 'No encontrado')
+
+    except (asyncio.TimeoutError, ConnectionError):
+        pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except (ConnectionError, OSError):
+            pass
+
+
+async def _handle_demora(writer: asyncio.StreamWriter, query: dict) -> None:
     """Espera 's' segundos y responde con un payload de texto."""
     try:
-        segundos = float(request.query.get('s', '1'))
-    except ValueError:
-        return web.Response(status=400, text='Parámetro s inválido')
+        segundos = float(query.get('s', ['1'])[0])
+    except (ValueError, IndexError):
+        _enviar_respuesta(writer, 400, 'Parámetro s inválido')
+        return
+
+    tamano = 1024
+    try:
+        tamano = int(query.get('bytes', ['1024'])[0])
+    except (ValueError, IndexError):
+        pass
 
     await asyncio.sleep(segundos)
 
-    # Devuelve un cuerpo de tamaño variable para que haya bytes que medir
-    tamano = int(request.query.get('bytes', '1024'))
     cuerpo = 'x' * tamano
-
-    return web.Response(status=200, text=cuerpo)
-
-
-async def handle_health(request: web.Request) -> web.Response:
-    """Health check simple."""
-    return web.Response(status=200, text='ok')
+    _enviar_respuesta(writer, 200, cuerpo)
 
 
-def main():
-    app = web.Application()
-    app.router.add_get('/demora', handle_demora)
-    app.router.add_get('/health', handle_health)
+def _enviar_respuesta(writer: asyncio.StreamWriter, status: int, cuerpo: str) -> None:
+    """Envía una respuesta HTTP/1.1 mínima."""
+    razones = {200: 'OK', 400: 'Bad Request', 404: 'Not Found', 405: 'Method Not Allowed'}
+    razon = razones.get(status, 'Unknown')
+    cuerpo_bytes = cuerpo.encode('utf-8')
 
+    respuesta = (
+        f'HTTP/1.1 {status} {razon}\r\n'
+        f'Content-Type: text/plain; charset=utf-8\r\n'
+        f'Content-Length: {len(cuerpo_bytes)}\r\n'
+        f'Connection: close\r\n'
+        f'\r\n'
+    ).encode('utf-8') + cuerpo_bytes
+
+    writer.write(respuesta)
+
+
+async def main():
     puerto = int(os.getenv('PUERTO', '9000'))
+
+    server = await asyncio.start_server(
+        _manejar_conexion,
+        host='0.0.0.0',
+        port=puerto,
+    )
     logger.info('Servidor lento escuchando en 0.0.0.0:%d', puerto)
-    web.run_app(app, host='0.0.0.0', port=puerto, print=None)
+
+    async with server:
+        await server.serve_forever()
 
 
 if __name__ == '__main__':
-    main()
+    asyncio.run(main())

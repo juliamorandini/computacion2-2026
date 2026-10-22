@@ -13,6 +13,18 @@ services:
     volumes:
       - estado_data:/app/estado
     stop_grace_period: 15s
+    depends_on:
+      - servidor_lento
+
+  servidor_lento:
+    build:
+      context: .
+      dockerfile: Dockerfile.servidor_lento
+    container_name: tp2_servidor_lento
+    ports:
+      - "9000:9000"
+    environment:
+      - PUERTO=9000
 
 volumes:
   estado_data:

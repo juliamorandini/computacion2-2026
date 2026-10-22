@@ -1,0 +1,7 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY mediciones/servidor_lento.py .
+
+CMD ["python", "servidor_lento.py"]

@@ -62,6 +62,12 @@ class Pool:
 
     async def detener(self, timeout: float) -> None:
         """Apagado ordenado: centinelas + espera con límite."""
+        # Vaciamos la cola: las pendientes no se ejecutan, quedan como
+        # 'pendiente' en el volcado.  Además deja lugar para los centinelas.
+        while not self._cola.empty():
+            self._cola.get_nowait()
+            self._cola.task_done()
+
         # Ponemos N centinelas para que cada worker salga del while True
         for _ in range(self._n_workers):
             await self._cola.put(_CENTINELA)

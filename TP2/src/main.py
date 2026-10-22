@@ -210,8 +210,11 @@ if __name__ == '__main__':
     # La guarda __main__ es obligatoria: sin ella, en macOS/Windows el
     # ProcessPoolExecutor (que usa spawn) re-importa este módulo y entra
     # en un bucle infinito de arranques (consigna §4.1).
+    # Se pasa el objeto app y no el string 'main:app': con el string uvicorn
+    # importa este archivo otra vez como módulo 'main', distinto de
+    # '__main__', y _on_senal vería su propio _servidor en None.
     config = uvicorn.Config(
-        app='main:app',
+        app=app,
         host='0.0.0.0',
         port=8000,
         log_level='info',

@@ -60,9 +60,7 @@ async def crear_tarea(payload: TareaIn):
     if not _aceptando:
         raise HTTPException(status_code=503, detail='El servidor está apagándose')
 
-    # Validar tipo
-    if payload.tipo not in ('esperar', 'descargar', 'hashear'):
-        raise HTTPException(status_code=422, detail=f'Tipo no válido: {payload.tipo!r}')
+    # tipo y params ya vienen validados por Pydantic (422 si son inválidos)
 
     # Crear tarea
     tarea_id = uuid.uuid4().hex[:12]

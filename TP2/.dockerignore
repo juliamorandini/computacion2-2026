@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 mediciones/
+!mediciones/servidor_lento.py
 tests/
 *.md
 .git/

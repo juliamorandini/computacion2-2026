@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import enum
 import time
-from typing import Any, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Literal, Optional
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---- Estados ---- #
@@ -34,9 +34,38 @@ class TareaIn(BaseModel):
         {"tipo": "descargar", "params": {"urls": ["https://example.com"]}}
         {"tipo": "hashear",   "params": {"texto": "hola", "iteraciones": 100000}}
     """
-    tipo: str = Field(..., description='Tipo de tarea: esperar, descargar o hashear')
+    tipo: Literal['esperar', 'descargar', 'hashear'] = Field(..., description='Tipo de tarea: esperar, descargar o hashear')
     params: dict[str, Any] = Field(default_factory=dict, description='Parámetros específicos del tipo')
     timeout: Optional[float] = Field(None, gt=0, description='Timeout en segundos (opcional, usa el default si no se envía)')
+
+    @model_validator(mode='after')
+    def _validar_params(self) -> 'TareaIn':
+        """Valida params con el modelo de su tipo y los deja normalizados."""
+        modelo = _PARAMS_POR_TIPO[self.tipo]
+        self.params = modelo.model_validate(self.params).model_dump()
+        return self
+
+
+# ---- Params por tipo ---- #
+
+class ParamsEsperar(BaseModel):
+    segundos: float = Field(1, ge=0)
+
+
+class ParamsDescargar(BaseModel):
+    urls: list[str] = Field(..., min_length=1)
+
+
+class ParamsHashear(BaseModel):
+    texto: str = ''
+    iteraciones: int = Field(1000, gt=0)
+
+
+_PARAMS_POR_TIPO: dict[str, type[BaseModel]] = {
+    'esperar': ParamsEsperar,
+    'descargar': ParamsDescargar,
+    'hashear': ParamsHashear,
+}
 
 
 # ---- Representación interna ---- #

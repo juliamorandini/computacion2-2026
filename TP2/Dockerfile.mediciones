@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+
+WORKDIR /mediciones
+
+RUN pip install --no-cache-dir httpx==0.27.2
+
+# El código no se copia: se monta mediciones/ como volumen (ver compose),
+# así los resultados quedan escritos en el host.
+CMD ["python", "medir_io.py"]

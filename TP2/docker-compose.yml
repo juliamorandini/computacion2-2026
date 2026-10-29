@@ -4,10 +4,16 @@ services:
     container_name: tp2_api
     ports:
       - "8000:8000"
+    # Los valores se pueden sobreescribir desde el host, por ejemplo:
+    #   HASH_EN_EXECUTOR=0 docker compose up -d api
+    # (lo usa mediciones/correr_mediciones.sh para cada corrida)
     environment:
-      - WORKERS=4
-      - COLA_MAX=100
-      - TIMEOUT_DEFAULT=30
+      - WORKERS=${WORKERS:-4}
+      - COLA_MAX=${COLA_MAX:-100}
+      - PROCESOS_CPU=${PROCESOS_CPU:-2}
+      - HASH_EN_EXECUTOR=${HASH_EN_EXECUTOR:-1}
+      - MAX_DESCARGAS_SIMULTANEAS=${MAX_DESCARGAS_SIMULTANEAS:-10}
+      - TIMEOUT_DEFAULT=${TIMEOUT_DEFAULT:-30}
       - LIMITE_APAGADO=10
       - DIR_ESTADO=/app/estado
     volumes:
@@ -25,6 +31,22 @@ services:
       - "9000:9000"
     environment:
       - PUERTO=9000
+
+  # Cliente de las mediciones.  No arranca con 'docker compose up':
+  #   docker compose run --rm mediciones python medir_io.py
+  mediciones:
+    profiles: ["mediciones"]
+    build:
+      context: .
+      dockerfile: Dockerfile.mediciones
+    volumes:
+      - ./mediciones:/mediciones
+    working_dir: /mediciones
+    environment:
+      - URL_API=http://api:8000
+      - URL_LENTO=http://servidor_lento:9000
+    # Sin depends_on a propósito: 'compose run' recrearía la api con la
+    # configuración por defecto y pisaría la de la medición en curso.
 
 volumes:
   estado_data:

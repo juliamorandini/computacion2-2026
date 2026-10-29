@@ -148,8 +148,9 @@ async def lifespan(app: FastAPI):
     # Detener pool de workers (drena tareas con timeout)
     await pool.detener(timeout=LIMITE_APAGADO)
 
-    # Volcar estado a JSON
-    volcar_estado(registro, DIR_ESTADO)
+    # Volcar estado a JSON.  Escribir un archivo es I/O de disco bloqueante:
+    # se manda a un thread para no congelar el loop mientras se cierra.
+    await asyncio.to_thread(volcar_estado, registro, DIR_ESTADO)
 
     # Cerrar httpx client
     await cliente_http.aclose()

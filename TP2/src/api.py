@@ -62,21 +62,21 @@ async def crear_tarea(payload: TareaIn):
 
     # tipo y params ya vienen validados por Pydantic (422 si son inválidos)
 
+    # Cola llena: se rechaza antes de registrar, así el registro no se llena
+    # de tareas que el cliente nunca conoció (recibió 503, no un id).
+    # Entre este chequeo y el put_nowait no hay ningún await: nadie puede
+    # llenar la cola en el medio.
+    if _cola.full():
+        raise HTTPException(status_code=503, detail='Cola de tareas llena')
+
     # Crear tarea
     tarea_id = uuid.uuid4().hex[:12]
     timeout = payload.timeout if payload.timeout is not None else TIMEOUT_DEFAULT
     tarea = Tarea(id=tarea_id, tipo=payload.tipo, params=payload.params, timeout=timeout)
 
-    # Registrar (sin await = atómico en el loop)
+    # Registrar y encolar (sin await = atómico en el loop)
     _registro.registrar(tarea)
-
-    # Encolar (put_nowait: si la cola está llena, salta QueueFull)
-    try:
-        _cola.put_nowait(tarea_id)
-    except asyncio.QueueFull:
-        # Sacamos la tarea del registro porque no se pudo encolar
-        _registro.marcar_fallida(tarea_id, 'cola llena')
-        raise HTTPException(status_code=503, detail='Cola de tareas llena')
+    _cola.put_nowait(tarea_id)
 
     return TareaOut(id=tarea_id, estado=tarea.estado.value)
 

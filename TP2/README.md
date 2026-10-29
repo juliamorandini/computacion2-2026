@@ -379,3 +379,5 @@ Para CPU-bound (tabla d), el techo son **los núcleos**, y los workers no influy
 ## 7. Lo que aprendí
 
 Aprendí mucho de fastapi y como aplicarlo, siempre habia visto muchas cosas pero nunca de esta forma. Ademas me gusto mucho lo de la parte asincronica del trabajo y ver como lo hacia. Aprendi mucho de como trabajar de forma colaborativa con la inteligencia artificial, use mucho el modo plan para armar algo que me ayudara a entender los temas y no solo escribir el codigo, que me ayudara a revisar que no se me pasaran errores y como corregirlos.
+
+Por favor ignorar que hay una rama de tp2-auditoria, no soy la mejor con git y a veces hago cosas raras, perdón

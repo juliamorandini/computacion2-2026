@@ -378,9 +378,4 @@ Para CPU-bound (tabla d), el techo son **los núcleos**, y los workers no influy
 
 ## 7. Lo que aprendí
 
-> ✏️ **BORRADOR PARA REEMPLAZAR.** Esta sección la tiene que escribir Julia con sus palabras. Abajo hay ideas para disparar, no un texto final.
->
-> - Qué te sorprendió de M2: ver que *toda* la API se muere durante el hash, no solo la tarea que lo pidió.
-> - La diferencia entre "concurrente" y "paralelo" vista en los números: M1 (11.7x con un solo hilo) contra M3d (hace falta más de un proceso para que el CPU escale).
-> - El bug del string `'main:app'`: cómo una señal que se logueaba bien igual no hacía nada, y qué te enseñó sobre módulos e importación en Python.
-> - Por qué no hacen falta locks y qué cambia respecto de los threads del primer cuatrimestre.
+Aprendí mucho de fastapi y como aplicarlo, siempre habia visto muchas cosas pero nunca de esta forma. Ademas me gusto mucho lo de la parte asincronica del trabajo y ver como lo hacia. Aprendi mucho de como trabajar de forma colaborativa con la inteligencia artificial, use mucho el modo plan para armar algo que me ayudara a entender los temas y no solo escribir el codigo, que me ayudara a revisar que no se me pasaran errores y como corregirlos.

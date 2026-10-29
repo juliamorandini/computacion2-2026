@@ -48,5 +48,17 @@ services:
     # Sin depends_on a propósito: 'compose run' recrearía la api con la
     # configuración por defecto y pisaría la de la medición en curso.
 
+  # Tests con pytest + pytest-asyncio.  No arranca con 'docker compose up':
+  #   docker compose run --rm tests
+  tests:
+    profiles: ["tests"]
+    build:
+      context: .
+      dockerfile: Dockerfile.tests
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./pytest.ini:/app/pytest.ini
+
 volumes:
   estado_data:

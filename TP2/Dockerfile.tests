@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements-dev.txt
+
+# El código y los tests no se copian: se montan como volumen (ver compose),
+# así se corren los tests sobre lo que está en el disco sin reconstruir.
+CMD ["pytest"]

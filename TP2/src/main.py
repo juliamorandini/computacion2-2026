@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import os
 import signal
 from concurrent.futures import ProcessPoolExecutor
@@ -20,7 +21,10 @@ from contextlib import asynccontextmanager
 
 import httpx
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from config import (
     WORKERS, COLA_MAX, LIMITE_APAGADO, DIR_ESTADO,
@@ -46,11 +50,8 @@ logger = logging.getLogger(__name__)
 
 # ---- Estado global del servidor ---- #
 
+# Lo usan los handlers de señales para pedirle a uvicorn que se detenga
 _servidor: uvicorn.Server | None = None
-_registro: Registro | None = None
-_pool: Pool | None = None
-_pool_cpu: ProcessPoolExecutor | None = None
-_cliente_http: httpx.AsyncClient | None = None
 
 
 # ---- Lifespan ---- #
@@ -74,8 +75,6 @@ async def lifespan(app: FastAPI):
       - Vuelca estado a JSON.
       - Cierra httpx client y ProcessPoolExecutor.
     """
-    global _registro, _pool, _pool_cpu, _cliente_http
-
     # Reportar volcado previo (si existe)
     reportar_volcado_previo(DIR_ESTADO)
 
@@ -117,11 +116,6 @@ async def lifespan(app: FastAPI):
         registro=registro,
         ejecutar_tarea=ejecutar_tarea,
     )
-
-    _registro = registro
-    _pool = pool
-    _pool_cpu = pool_cpu
-    _cliente_http = cliente_http
 
     # Inyectar dependencias en la API
     api.configurar(registro=registro, cola=pool.cola, pool=pool)
@@ -179,9 +173,9 @@ def _instalar_senales() -> None:
             loop.add_signal_handler(sig, _on_senal, sig)
         logger.info('Señales instaladas con add_signal_handler (Unix)')
     else:
-        # Windows: signal.signal (fallback)
+        # Windows: signal.signal con un flag (consigna §4.1)
         for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, lambda s, f: _on_senal(s))
+            signal.signal(sig, _levantar_flag_de_salida)
         logger.info('Señales instaladas con signal.signal (Windows)')
 
 
@@ -190,6 +184,18 @@ def _on_senal(sig) -> None:
     nombre = signal.Signals(sig).name if isinstance(sig, int) else str(sig)
     logger.info('Señal %s recibida, iniciando apagado...', nombre)
 
+    if _servidor is not None:
+        _servidor.should_exit = True
+
+
+def _levantar_flag_de_salida(signum, frame) -> None:
+    """Handler de signal.signal (Windows).
+
+    A diferencia de add_signal_handler, este handler interrumpe al hilo
+    principal entre dos bytecodes cualesquiera (clase 6), así que no hace
+    nada más que levantar un flag.  uvicorn consulta should_exit en su loop
+    cada 0.1 s y arranca el apagado; el log lo hace el lifespan.
+    """
     if _servidor is not None:
         _servidor.should_exit = True
 
@@ -203,6 +209,24 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(api.router)
+
+
+@app.exception_handler(RequestValidationError)
+async def error_de_validacion(request: Request, exc: RequestValidationError):
+    """422 con el detalle de cada error, como el handler de FastAPI.
+
+    El de FastAPI devuelve también el valor recibido ('input').  Si ese
+    valor es Infinity o NaN, armar el JSON de la respuesta revienta (JSON
+    no los admite) y el cliente recibe 500 en vez de 422.  Acá esos
+    valores se mandan como texto.
+    """
+    errores = []
+    for error in exc.errors():
+        entrada = error.get('input')
+        if isinstance(entrada, float) and not math.isfinite(entrada):
+            error = {**error, 'input': str(entrada)}
+        errores.append(error)
+    return JSONResponse(status_code=422, content=jsonable_encoder({'detail': errores}))
 
 
 # ---- Punto de entrada ---- #

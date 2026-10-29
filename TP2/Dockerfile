@@ -1,5 +1,9 @@
 FROM python:3.11-slim
 
+# Sin .pyc en la imagen, y los logs salen apenas se escriben (sin buffer)
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 COPY requirements.txt .

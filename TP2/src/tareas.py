@@ -103,7 +103,8 @@ async def _descargar(tarea_id: str, params: dict) -> dict:
     agotar descriptores de archivo (mismo patrón que clase 11).
 
     Si una URL falla, las demás siguen — cada resultado incluye 'error'
-    o 'status'+'bytes'+'segundos'.
+    o 'status'+'bytes'+'segundos'.  Si fallan todas, la tarea no hizo
+    nada útil: se lanza una excepción y el worker la marca 'fallida'.
     """
     urls = params.get('urls', [])
     if not urls:
@@ -129,6 +130,11 @@ async def _descargar(tarea_id: str, params: dict) -> dict:
         else:
             salida.append(resultado)
 
+    if all('error' in d for d in salida):
+        raise RuntimeError(
+            f'fallaron las {len(salida)} descargas (la primera: {salida[0]["error"]})'
+        )
+
     return {'descargas': salida}
 
 
@@ -138,18 +144,23 @@ async def _descargar_una(url: str) -> dict:
     El semáforo se usa con async with, así que se libera incluso si
     la corrutina es cancelada (el __aexit__ se ejecuta durante la
     propagación del CancelledError).
+
+    El cuerpo se lee por bloques y solo se cuentan los bytes: la memoria
+    usada no depende del tamaño de la respuesta.
     """
     async with _semaforo:
         inicio = time.perf_counter()
         # async with en la respuesta garantiza que se cierre la conexión
         # si la corrutina es cancelada a mitad de descarga
         async with _cliente_http.stream('GET', url) as respuesta:
-            contenido = await respuesta.aread()
+            total = 0
+            async for bloque in respuesta.aiter_bytes(65536):
+                total += len(bloque)
             duracion = time.perf_counter() - inicio
             return {
                 'url': url,
                 'status': respuesta.status_code,
-                'bytes': len(contenido),
+                'bytes': total,
                 'segundos': round(duracion, 4),
             }
 

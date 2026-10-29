@@ -40,18 +40,32 @@ class Registro:
         return [t.a_dict() for t in self._tareas.values()]
 
     def estadisticas(self, ocupados: int) -> dict:
-        """Totales por estado, tiempos promedio y workers ocupados."""
+        """Totales por estado, tiempos promedio y workers ocupados.
+
+        Dos tiempos promedio, en segundos:
+          - ejecucion: de iniciada a terminada, solo de las completadas.
+            Una cancelada o una que venció su timeout no dice cuánto tarda
+            una tarea, así que no entra en el promedio.
+          - espera_en_cola: de creada a iniciada, de todas las que ya
+            arrancaron.  Es el número que crece cuando faltan workers (M3).
+        """
         totales = {e.value: 0 for e in Estado}
-        tiempos: list[float] = []
+        ejecucion: list[float] = []
+        espera: list[float] = []
 
         for t in self._tareas.values():
             totales[t.estado.value] += 1
-            if t.iniciada_en is not None and t.terminada_en is not None:
-                tiempos.append(t.terminada_en - t.iniciada_en)
+            if t.iniciada_en is not None:
+                espera.append(t.iniciada_en - t.creada_en)
+            if t.estado == Estado.COMPLETADA:
+                ejecucion.append(t.terminada_en - t.iniciada_en)
 
         return {
             'totales': totales,
-            'tiempo_promedio': sum(tiempos) / len(tiempos) if tiempos else 0,
+            'tiempos_promedio': {
+                'ejecucion': _promedio(ejecucion),
+                'espera_en_cola': _promedio(espera),
+            },
             'workers_ocupados': ocupados,
             'total_tareas': len(self._tareas),
         }
@@ -94,3 +108,7 @@ class Registro:
     def todas(self) -> list[Tarea]:
         """Devuelve todas las tareas (para volcado de estado)."""
         return list(self._tareas.values())
+
+
+def _promedio(valores: list[float]) -> float:
+    return sum(valores) / len(valores) if valores else 0

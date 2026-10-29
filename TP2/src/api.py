@@ -28,15 +28,18 @@ _pool = None                     # Pool (para ocupados)
 _aceptando: bool = True
 
 
-def configurar(registro: Registro, cola: asyncio.Queue, pool, aceptando_ref=None) -> None:
+def configurar(registro: Registro, cola: asyncio.Queue, pool) -> None:
     """Inyecta las dependencias del módulo.
 
-    Se llama una sola vez en el lifespan, antes de que lleguen requests.
+    Se llama en cada arranque del lifespan, antes de que lleguen requests.
+    Vuelve a aceptar tareas: si la app se apagó y se levanta de nuevo en el
+    mismo proceso (pasa en los tests), _aceptando quedó en False.
     """
-    global _registro, _cola, _pool
+    global _registro, _cola, _pool, _aceptando
     _registro = registro
     _cola = cola
     _pool = pool
+    _aceptando = True
 
 
 def dejar_de_aceptar() -> None:
@@ -84,22 +87,15 @@ async def crear_tarea(payload: TareaIn):
 # ---- GET /tareas ---- #
 
 @router.get('/tareas')
-async def listar_tareas(estado: Optional[str] = Query(None, description='Filtrar por estado')):
+async def listar_tareas(estado: Optional[Estado] = Query(None, description='Filtrar por estado')):
     """Lista todas las tareas, con filtro opcional por estado.
 
     Ejemplo: GET /tareas?estado=pendiente
-    """
-    filtro = None
-    if estado is not None:
-        try:
-            filtro = Estado(estado)
-        except ValueError:
-            raise HTTPException(
-                status_code=400,
-                detail=f'Estado no válido: {estado!r}. Usar: {[e.value for e in Estado]}',
-            )
 
-    return _registro.listar(filtro)
+    Al anotar el parámetro con el Enum, FastAPI valida el valor (422 si
+    no es uno de los cinco estados) y /docs muestra las opciones.
+    """
+    return _registro.listar(estado)
 
 
 # ---- GET /tareas/{id} ---- #
@@ -129,13 +125,23 @@ async def cancelar_tarea(tarea_id: str):
 
     if tarea.estado == Estado.PENDIENTE:
         _registro.marcar_cancelada(tarea_id)
-        return {'id': tarea_id, 'estado': Estado.CANCELADA.value}
+        return TareaOut(id=tarea_id, estado=tarea.estado.value)
 
     if tarea.estado == Estado.EJECUTANDO:
-        # Cancelamos el Task interno, no al worker
-        if tarea.task_interno is not None and not tarea.task_interno.done():
-            tarea.task_interno.cancel('cancelada por DELETE')
-        return {'id': tarea_id, 'estado': 'cancelando'}
+        # Cancelamos el Task interno, no al worker.  cancel() solo pide la
+        # cancelación: el CancelledError entra en el próximo await de la
+        # tarea.  Esperamos a que termine de verdad (sin bloquear el loop:
+        # es un await), así la respuesta trae el estado final y para
+        # entonces las conexiones, el semáforo y el worker ya se liberaron.
+        #
+        # El worker hace await de este mismo Task desde antes, así que su
+        # callback está primero en la lista: cuando el Task termina, el
+        # worker marca 'cancelada' antes de que este await se despierte.
+        task = tarea.task_interno
+        if task is not None and not task.done():
+            task.cancel('cancelada por DELETE')
+            await asyncio.wait([task], timeout=1)
+        return TareaOut(id=tarea_id, estado=tarea.estado.value)
 
     # Ya terminó
     raise HTTPException(

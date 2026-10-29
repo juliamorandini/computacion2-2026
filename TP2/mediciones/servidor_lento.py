@@ -46,7 +46,7 @@ async def _manejar_conexion(reader: asyncio.StreamReader, writer: asyncio.Stream
         # Parsear método y path
         partes = linea_request.decode('utf-8', errors='replace').strip().split(' ')
         if len(partes) < 2:
-            _enviar_respuesta(writer, 400, 'Request inválido')
+            await _enviar_respuesta(writer,400, 'Request inválido')
             return
 
         metodo, ruta_completa = partes[0], partes[1]
@@ -55,15 +55,15 @@ async def _manejar_conexion(reader: asyncio.StreamReader, writer: asyncio.Stream
         query = parse_qs(parsed.query)
 
         if metodo != 'GET':
-            _enviar_respuesta(writer, 405, 'Solo GET')
+            await _enviar_respuesta(writer,405, 'Solo GET')
             return
 
         if ruta == '/demora':
             await _handle_demora(writer, query)
         elif ruta == '/health':
-            _enviar_respuesta(writer, 200, 'ok')
+            await _enviar_respuesta(writer,200, 'ok')
         else:
-            _enviar_respuesta(writer, 404, 'No encontrado')
+            await _enviar_respuesta(writer,404, 'No encontrado')
 
     except (asyncio.TimeoutError, ConnectionError):
         pass
@@ -80,7 +80,7 @@ async def _handle_demora(writer: asyncio.StreamWriter, query: dict) -> None:
     try:
         segundos = float(query.get('s', ['1'])[0])
     except (ValueError, IndexError):
-        _enviar_respuesta(writer, 400, 'Parámetro s inválido')
+        await _enviar_respuesta(writer,400, 'Parámetro s inválido')
         return
 
     tamano = 1024
@@ -92,11 +92,15 @@ async def _handle_demora(writer: asyncio.StreamWriter, query: dict) -> None:
     await asyncio.sleep(segundos)
 
     cuerpo = 'x' * tamano
-    _enviar_respuesta(writer, 200, cuerpo)
+    await _enviar_respuesta(writer,200, cuerpo)
 
 
-def _enviar_respuesta(writer: asyncio.StreamWriter, status: int, cuerpo: str) -> None:
-    """Envía una respuesta HTTP/1.1 mínima."""
+async def _enviar_respuesta(writer: asyncio.StreamWriter, status: int, cuerpo: str) -> None:
+    """Envía una respuesta HTTP/1.1 mínima.
+
+    write() solo copia al buffer del transporte; drain() espera a que ese
+    buffer baje si el cliente lee lento (backpressure, clase 20).
+    """
     razones = {200: 'OK', 400: 'Bad Request', 404: 'Not Found', 405: 'Method Not Allowed'}
     razon = razones.get(status, 'Unknown')
     cuerpo_bytes = cuerpo.encode('utf-8')
@@ -110,6 +114,7 @@ def _enviar_respuesta(writer: asyncio.StreamWriter, status: int, cuerpo: str) ->
     ).encode('utf-8') + cuerpo_bytes
 
     writer.write(respuesta)
+    await writer.drain()
 
 
 async def main():

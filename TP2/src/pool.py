@@ -61,23 +61,34 @@ class Pool:
         logger.info('Pool iniciado con %d workers', self._n_workers)
 
     async def detener(self, timeout: float) -> None:
-        """Apagado ordenado: centinelas + espera con límite."""
+        """Apagado ordenado: centinelas + espera con límite.
+
+        Todo el drenado corre bajo un único asyncio.timeout: pase lo que
+        pase adentro, a los `timeout` segundos se corta y se cancela a los
+        workers que sigan vivos.
+        """
         # Vaciamos la cola: las pendientes no se ejecutan, quedan como
         # 'pendiente' en el volcado.  Además deja lugar para los centinelas.
         while not self._cola.empty():
             self._cola.get_nowait()
             self._cola.task_done()
 
-        # Ponemos N centinelas para que cada worker salga del while True
-        for _ in range(self._n_workers):
-            await self._cola.put(_CENTINELA)
-
-        # Esperamos con límite
-        terminados, pendientes = await asyncio.wait(
-            self._workers, timeout=timeout,
-        )
+        try:
+            async with asyncio.timeout(timeout):
+                # N centinelas para que cada worker salga del while True.
+                # Si la cola es más chica que el pool y todos los workers
+                # están ocupados, el put espera a que alguno se libere: por
+                # eso va dentro del timeout.  Afuera, el apagado podía
+                # quedar colgado para siempre y nunca volcar el estado.
+                for _ in range(self._n_workers):
+                    await self._cola.put(_CENTINELA)
+                await asyncio.wait(self._workers)
+        except TimeoutError:
+            pass
 
         # Lo que no terminó se cancela
+        pendientes = [w for w in self._workers if not w.done()]
+        terminados = len(self._workers) - len(pendientes)
         for task in pendientes:
             task.cancel('apagado')
             logger.warning('Worker %s cancelado por timeout de apagado', task.get_name())
@@ -87,7 +98,7 @@ class Pool:
             await asyncio.wait(pendientes, timeout=2)
 
         logger.info('Pool detenido (%d terminados, %d cancelados)',
-                     len(terminados), len(pendientes))
+                     terminados, len(pendientes))
 
     # ---- Worker ---- #
 

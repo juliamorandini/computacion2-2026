@@ -10,7 +10,20 @@ from __future__ import annotations
 import enum
 import time
 from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field, model_validator
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+# ---- Topes ---- #
+# Una sola tarea no puede pedir trabajo ilimitado: sin topes, un POST con
+# 50.000 URLs lanzaría 50.000 corrutinas dentro de un solo worker y
+# esquivaría el límite de la cola.
+
+MAX_URLS = 100
+MAX_ITERACIONES = 100_000_000
+MAX_TEXTO = 10_000
+MAX_SEGUNDOS = 3600
 
 
 # ---- Estados ---- #
@@ -33,10 +46,19 @@ class TareaIn(BaseModel):
         {"tipo": "esperar",   "params": {"segundos": 5}}
         {"tipo": "descargar", "params": {"urls": ["https://example.com"]}}
         {"tipo": "hashear",   "params": {"texto": "hola", "iteraciones": 100000}}
+
+    extra='forbid' en todos los modelos: un campo desconocido (por ejemplo
+    el typo "segundo" en vez de "segundos") da 422 en vez de ignorarse y
+    ejecutar el default sin avisar.
     """
+    model_config = ConfigDict(extra='forbid')
+
     tipo: Literal['esperar', 'descargar', 'hashear'] = Field(..., description='Tipo de tarea: esperar, descargar o hashear')
     params: dict[str, Any] = Field(default_factory=dict, description='Parámetros específicos del tipo')
-    timeout: Optional[float] = Field(None, gt=0, description='Timeout en segundos (opcional, usa el default si no se envía)')
+    timeout: Optional[float] = Field(
+        None, gt=0, le=MAX_SEGUNDOS, allow_inf_nan=False,
+        description='Timeout en segundos (opcional, usa el default si no se envía)',
+    )
 
     @model_validator(mode='after')
     def _validar_params(self) -> 'TareaIn':
@@ -49,16 +71,37 @@ class TareaIn(BaseModel):
 # ---- Params por tipo ---- #
 
 class ParamsEsperar(BaseModel):
-    segundos: float = Field(1, ge=0)
+    model_config = ConfigDict(extra='forbid')
+
+    segundos: float = Field(1, ge=0, le=MAX_SEGUNDOS, allow_inf_nan=False)
 
 
 class ParamsDescargar(BaseModel):
-    urls: list[str] = Field(..., min_length=1)
+    model_config = ConfigDict(extra='forbid')
+
+    urls: list[str] = Field(..., min_length=1, max_length=MAX_URLS)
+
+    @field_validator('urls')
+    @classmethod
+    def _solo_http(cls, urls: list[str]) -> list[str]:
+        """Solo URLs http:// o https:// con host.
+
+        Se valida a mano y no con AnyHttpUrl porque ese tipo normaliza la
+        URL (por ejemplo agrega '/' al final) y el resultado mostraría una
+        URL distinta de la que mandó el cliente.
+        """
+        for url in urls:
+            partes = urlsplit(url)
+            if partes.scheme not in ('http', 'https') or not partes.hostname:
+                raise ValueError(f'URL inválida (tiene que ser http:// o https://): {url!r}')
+        return urls
 
 
 class ParamsHashear(BaseModel):
-    texto: str = ''
-    iteraciones: int = Field(1000, gt=0)
+    model_config = ConfigDict(extra='forbid')
+
+    texto: str = Field('', max_length=MAX_TEXTO)
+    iteraciones: int = Field(1000, gt=0, le=MAX_ITERACIONES)
 
 
 _PARAMS_POR_TIPO: dict[str, type[BaseModel]] = {

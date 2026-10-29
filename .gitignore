@@ -11,3 +11,13 @@ __pycache__/
 # OS
 .DS_Store
 .venv/
+
+# Tests
+.pytest_cache/
+
+# Herramientas locales
+.claude/
+
+# TP2: volcados de estado si se corre fuera de Docker
+estado/
+estado_*.json

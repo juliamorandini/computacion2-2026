@@ -10,11 +10,13 @@ Hay tres tipos de tarea:
 
 | Tipo | Naturaleza | Parámetros | Resultado |
 |------|-----------|-----------|-----------|
-| `descargar` | I/O-bound | `urls`: lista no vacía | por URL: `status`, `bytes`, `segundos` (o `error`) |
-| `hashear` | CPU-bound | `texto`, `iteraciones` > 0 | SHA-256 aplicado N veces |
-| `esperar` | I/O simulado | `segundos` ≥ 0 | los segundos esperados |
+| `descargar` | I/O-bound | `urls`: de 1 a 100 URLs `http://` o `https://` | por URL: `status`, `bytes`, `segundos` (o `error`) |
+| `hashear` | CPU-bound | `texto` (hasta 10.000 caracteres), `iteraciones` de 1 a 100.000.000 | SHA-256 aplicado N veces |
+| `esperar` | I/O simulado | `segundos` de 0 a 3600 | los segundos esperados |
 
-Todas aceptan además un `timeout` opcional en segundos. Si no se manda, se usa `TIMEOUT_DEFAULT` (30 s).
+Todas aceptan además un `timeout` opcional en segundos, mayor que 0 y hasta 3600. Si no se manda, se usa `TIMEOUT_DEFAULT` (30 s). Los topes existen para que una sola tarea no pueda pedir trabajo ilimitado: sin tope, un POST con 50.000 URLs lanzaría 50.000 corrutinas dentro de un worker y esquivaría el límite de la cola.
+
+Si en `descargar` falla alguna URL, la tarea queda `completada` y esa URL trae su `error`. Si fallan **todas**, la tarea queda `fallida`, porque no hizo nada útil.
 
 ### Cómo levantarlo
 
@@ -49,7 +51,7 @@ curl -X POST localhost:8000/tareas -H 'Content-Type: application/json' \
 curl localhost:8000/tareas                     # todas
 curl "localhost:8000/tareas?estado=ejecutando" # filtradas por estado
 curl localhost:8000/tareas/<id>                # una (404 si no existe)
-curl localhost:8000/estadisticas               # totales por estado, tiempo promedio, workers ocupados
+curl localhost:8000/estadisticas               # totales por estado, tiempos promedio (ejecución y espera en cola), workers ocupados
 
 # Cancelar (sirve tanto en pendiente como en ejecución; 409 si ya terminó)
 curl -X DELETE localhost:8000/tareas/<id>
@@ -59,7 +61,27 @@ docker compose stop api
 docker compose start api && docker compose logs api | grep "Volcado previo"
 ```
 
-Respuestas de error: **422** si la tarea es inválida (por ejemplo un tipo desconocido, `urls: []` o `iteraciones: 0`), **503** si la cola está llena o el servidor se está apagando, **404** si la tarea no existe y **409** si se intenta cancelar una tarea que ya terminó.
+El `DELETE` responde con el estado final: `{"id": ..., "estado": "cancelada"}`. Sobre una tarea en ejecución, espera a que el `asyncio.Task` de la tarea termine de verdad (milisegundos) antes de responder.
+
+Respuestas de error:
+- **422** si la tarea es inválida: un tipo desconocido, `urls: []`, una URL que no es `http(s)`, `iteraciones: 0`, valores fuera de los topes, `Infinity`/`NaN`, o un campo desconocido (un typo como `"segundo"` en vez de `"segundos"` no se ignora). También si `?estado=` no es uno de los cinco estados.
+- **503** si la cola está llena o el servidor se está apagando.
+- **404** si la tarea no existe.
+- **409** si se intenta cancelar una tarea que ya terminó.
+
+### Tests
+
+```bash
+cd TP2
+docker compose run --rm tests
+```
+
+Son 56 tests con `pytest` + `pytest-asyncio` y corren dentro de un contenedor, así que no hace falta instalar nada. Levantan la app con su `lifespan` real (cola, workers, pool de procesos) y le hablan con `httpx.ASGITransport`, sin abrir un socket. Las descargas van contra un servidor HTTP falso (`httpx.MockTransport`) para no depender de la red. Cubren:
+
+- `test_api_validacion.py`: el POST responde en < 50 ms aunque la tarea dure 10 s, todos los casos de 422, el filtro por estado, 404 y `/estadisticas`.
+- `test_concurrencia_y_cpu.py`: 5 descargas de 0.3 s tardan < 0.6 s, el hash en bloques da el mismo resultado que el SHA-256 iterado, un `GET` no pasa de 50 ms durante un hash pesado, y **sin executor** el loop se atrasa más de 200 ms (M2 como test).
+- `test_cancelacion_y_timeout.py`: DELETE de una pendiente, DELETE a mitad de cada uno de los tres tipos (verifica que queden el worker libre, el semáforo completo y ningún Task huérfano), 409 y timeouts.
+- `test_backpressure_y_apagado.py`: 503 con la cola llena sin dejar tareas fantasma, el apagado ordenado con su volcado, y el reporte del volcado previo al arrancar.
 
 ### Configuración
 
@@ -89,6 +111,7 @@ TP2/
 │   ├── cpu.py           # sha256_bloque (top-level, picklable) e initializer de los hijos
 │   ├── persistencia.py  # volcado estado_<timestamp>.json y reporte al arrancar
 │   └── config.py        # variables de entorno
+├── tests/               # pytest + pytest-asyncio (docker compose run --rm tests)
 └── mediciones/          # servidor_lento.py, medir_*.py, correr_mediciones.sh, resultados/
 ```
 
@@ -180,8 +203,9 @@ El worker no ejecuta la tarea directamente: crea un `asyncio.Task` interno y lo 
   - `hashear`: el error sale del `await` del bloque en curso. Ese bloque termina en el hijo (~35 ms) y su resultado se descarta. No se manda el siguiente, y el proceso del pool queda libre para otra tarea.
 - **¿Cancelaron la tarea o al worker?** Las dos cosas llegan como el mismo `CancelledError`. Para distinguirlas, el worker usa `asyncio.current_task().cancelling()`. Si es mayor que cero, lo cancelaron a él (apagado): marca la tarea `cancelada` con el motivo "apagado del sistema" y **relanza** el error, porque tragarse un `CancelledError` propio rompe el protocolo de cancelación de asyncio. Si es cero, fue un DELETE: marca `cancelada` y sigue con la siguiente tarea.
 - **Timeout**: `async with asyncio.timeout(t)` cancela por dentro y lo convierte en `TimeoutError`. Se captura y la tarea queda `fallida` con el motivo "timeout de Xs excedido". Libera los recursos por el mismo camino que la cancelación.
+- **La respuesta del DELETE**: `cancel()` no corta nada en el momento, solo pide la cancelación. Por eso el endpoint hace `await asyncio.wait([task], timeout=1)` antes de responder. Es un `await`, así que no bloquea el loop, y al volver la tarea ya está `cancelada` y sus recursos ya se liberaron. No hay carrera con el worker: el worker hacía `await` de ese mismo Task desde antes, así que su callback está primero en la cola del loop y marca `cancelada` antes de que el endpoint se despierte.
 
-Lo verifiqué a mano. Un DELETE a mitad de un `esperar 30`, de un `descargar` de dos URLs de 20 s o de un `hashear` de 20 millones de iteraciones deja la tarea `cancelada` en menos de un segundo.
+Está verificado a mano y con tests. Un DELETE a mitad de un `esperar 30`, de un `descargar` lento o de un `hashear` de 100 millones de iteraciones deja la tarea `cancelada` en unos 10 ms. Los tests además comprueban que después del DELETE el worker está libre, el semáforo tiene todos sus lugares y no queda ningún `asyncio.Task` vivo de esa tarea, ni el interno ni los hijos del `gather`.
 
 ### ¿Qué pasa si un worker lanza una excepción no capturada?
 
@@ -197,13 +221,18 @@ Si igual se escapara algo del bucle del worker (un bug en el propio worker y no 
 - **Apagado ordenado.** `loop.add_signal_handler` (o `signal.signal` en Windows fuera de Docker) recibe SIGTERM/SIGINT y le pide a uvicorn que deje de escuchar. Después, el `lifespan` hace lo siguiente:
   1. Pone `aceptando = False`, así que el POST devuelve 503.
   2. Vacía la cola, de modo que las pendientes **no se ejecutan** y quedan en el volcado como `pendiente`.
-  3. Pone un centinela `object()` por worker y les da `LIMITE_APAGADO` segundos para terminar lo que tienen en curso.
+  3. Pone un centinela `object()` por worker y les da `LIMITE_APAGADO` segundos para terminar lo que tienen en curso. Poner los centinelas y esperar a los workers corren **juntos** bajo un mismo `asyncio.timeout`: si la cola es más chica que el pool y todos los workers están ocupados, el `put` del centinela espera a que alguno se libere, y fuera del timeout el apagado podía quedar colgado para siempre.
   4. Cancela a los que no llegaron (sus tareas quedan `cancelada` con el motivo "apagado del sistema").
   5. Escribe `estado_<YYYYmmdd_HHMMSS>.json` desde un thread (`asyncio.to_thread`).
   6. Cierra httpx y el pool de procesos.
 
   En Docker, el `CMD` en forma exec hace que Python sea el PID 1 y reciba la señal directamente, y `stop_grace_period: 15s` es mayor que `LIMITE_APAGADO`, porque con el default de 10 s Docker mataría el proceso con SIGKILL a mitad del drenado. El volcado se guarda en un volumen, así que sobrevive al contenedor. Al arrancar, se loguea el último volcado con los conteos por estado. No se restaura, porque la consigna pide solo reportarlo.
 - **Un bug que encontré en el camino.** Al principio uvicorn se arrancaba con `uvicorn.Config(app='main:app')`. Con el string, uvicorn **importa `main.py` por segunda vez**, como un módulo llamado `main`, distinto del `__main__` que se estaba ejecutando. El handler de señal y la referencia al servidor quedaban en módulos distintos: la señal se logueaba pero nadie le avisaba a uvicorn, y Docker terminaba matando el proceso sin volcado. Se arregló pasando el objeto `app` directamente.
+- **Bugs que encontraron los tests.** Escribí primero los tests de lo que debería pasar y los corrí contra el código existente. Fallaron estos casos, que después corregí:
+  - **Apagado colgado con `COLA_MAX < WORKERS`.** Los centinelas se ponían con `await cola.put()` antes de que empezara a correr el límite de tiempo. Si la cola no tenía lugar y todos los workers estaban ocupados, el apagado no terminaba nunca, Docker mataba el proceso con SIGKILL y no había volcado.
+  - **`_aceptando` nunca volvía a `True`.** Después del primer apagado, una app levantada otra vez en el mismo proceso rechazaba todo con 503. En producción no pasa, porque el proceso muere, pero con los tests apareció enseguida.
+  - **Validación permisiva.** `{"segundo": 10}` con el typo devolvía 201 y esperaba 1 s, el default, sin avisar. Se arregló con `extra='forbid'`. Al agregar el rechazo de `Infinity`, apareció otro bug: el handler de 422 de FastAPI devuelve el valor recibido dentro del JSON, JSON no admite `Infinity`, y el cliente recibía **500** en vez de 422. Lo resuelve un handler propio que manda esos valores como texto.
+  - **El DELETE respondía `"cancelando"`**, que no es uno de los cinco estados. Un segundo DELETE inmediato también devolvía 200, porque la tarea seguía figurando `ejecutando`.
 
 ### Preguntas de la corrección
 
@@ -344,7 +373,8 @@ Para CPU-bound (tabla d), el techo son **los núcleos**, y los workers no influy
 - **Cancelar un `hashear` no es instantáneo.** Demora hasta un bloque (~35 ms con 100.000 iteraciones). Bloques más chicos cancelarían antes, pero con más overhead de ida y vuelta entre procesos.
 - **El timeout de una descarga individual es fijo (30 s, en el cliente httpx).** No depende del `timeout` de la tarea. Si la tarea tiene un timeout menor, manda el de la tarea, pero no existe un timeout por URL configurable.
 - **No hay autenticación ni límite por cliente.** Cualquiera puede llenar la cola. El 503 protege al servidor, pero no reparte la capacidad de forma justa entre clientes.
-- **La respuesta del DELETE sobre una tarea en ejecución dice `"estado": "cancelando"`,** que no es uno de los cinco estados. Significa que la cancelación se pidió y todavía no surtió efecto. Un `GET` posterior muestra `cancelada`.
+- **Si un proceso del pool de CPU muere, el pool queda roto.** Si el sistema mata a un hijo del `ProcessPoolExecutor` (por ejemplo el OOM killer), el executor queda marcado como roto y todas las tareas `hashear` siguientes fallan con `BrokenProcessPool` hasta reiniciar el servidor. Las demás tareas siguen andando. La solución sería capturar esa excepción y recrear el pool.
+- **Los tiempos se miden con `time.time()`.** Si el reloj del sistema se ajusta en medio de una tarea (por NTP), su duración en `/estadisticas` sale corrida. Para duraciones, lo correcto sería `time.monotonic()`.
 
 ## 7. Lo que aprendí
 

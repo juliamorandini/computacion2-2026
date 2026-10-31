@@ -378,6 +378,8 @@ Para CPU-bound (tabla d), el techo son **los núcleos**, y los workers no influy
 
 ## 7. Lo que aprendí
 
-Aprendí mucho de fastapi y como aplicarlo, siempre habia visto muchas cosas pero nunca de esta forma. Ademas me gusto mucho lo de la parte asincronica del trabajo y ver como lo hacia. Aprendi mucho de como trabajar de forma colaborativa con la inteligencia artificial, use mucho el modo plan para armar algo que me ayudara a entender los temas y no solo escribir el codigo, que me ayudara a revisar que no se me pasaran errores y como corregirlos.
+Antes de este TP pensaba que concurrencia era sinónimo de threads. Termine aprendiendo (con muchas preguntas a claude xq no me cerraba) que un solo hilo puede atender cientos de clientes si nunca se queda esperando, y que el await es el único punto donde el loop puede cambiar de tarea.
 
-Por favor ignorar que hay una rama de tp2-auditoria, no soy la mejor con git y a veces hago cosas raras, perdón
+Lo que más me costó fue la cancelación. Tuve que entender que cancel() no cortaba nada en el momento, que lanza un CancelledError en el await pendiente, y que un future de proceso ya iniciado no se puede cancelar, de ahí el hash en bloques. 
+
+Me gusto mucho usar la IA como tutor: pedí planes para entender cada tema antes de escribir código y le pedia cada 5 lineas que me explicara cosas, y escribí los tests primero para que me mostraran dónde fallaba mi diseño, etc. La verdad muy lindo proyecto.
